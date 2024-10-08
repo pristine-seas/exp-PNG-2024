@@ -1,0 +1,222 @@
+---
+title: "PNG 2024 expedition report"
+subtitle: "Trip summary"
+author: "Juan Mayorga / Kat Millage"
+number-sections: true
+date: today
+theme: cosmo
+format: 
+  html:
+    self-contained: true
+    code-fold: true
+    toc: true
+    toc-location: left
+---
+
+```{r, message=F, warning = F, fig.width=10, fig.height=10, echo = F}
+library(paletteer)
+library(sf)
+library(terra)
+library(tidyverse)
+
+knitr::opts_chunk$set(eval = F, warning = F, message = F, include = F, echo = F)
+
+# Path to PS Science GD
+#PristineSeasR::set_ps_paths(email = "kmillage@ngs.org")
+ps_science_path <- "/Users/kat/Library/CloudStorage/GoogleDrive-kmillage@ngs.org/My Drive/Pristine Seas/SCIENCE"
+
+# Path to GD folder for this expedition
+GD_path <-  file.path(ps_science_path, "expeditions", "PNG-2024")
+
+# Path to the NAS (if on the boat)
+NAS_path <- "/Volumes/exp-Palau-2024/"
+
+# Path to the external G-Drive
+HD_path <- "/Volumes/PLW-2024 2/"
+```
+
+# Create Directories
+
+This section can be used to automatically create properly named folders for the seabed BRUV deployments if desired. 
+
+```{r}
+# Check 
+file.exists(file.path(HD_path, "data/primary/raw/bruvs/deployments/"))
+
+paste0(file.path(HD_path, "data/primary/raw/bruvs/deployments/", "PLW-2024-bruvs")) %>% 
+  paste(as.vector(outer(formatC(seq(59,62), width = 2, flag = 0),
+                        c("L", "R"), 
+                        paste0)),
+        sep = "-") %>% 
+  purrr::map(dir.create)
+```
+
+# Expedition Metadata 
+
+This section reads in and combines the metadata files for all methods. 
+
+```{r bruvs}
+bruvs <- readxl::read_xlsx(file.path(NAS_path, "data/bruvs/PLW_2024_bruvs_fieldbook.xlsx")) %>% 
+  select(ps_station_id, lat, lon, location) %>% 
+  mutate(method = "Benthic BRUVs")
+```
+
+```{r dscm}
+dscm <- readxl::read_xlsx(file.path(NAS_path, "data/dscm/PLW_2024_dscm_fieldbook.xlsx")) %>% 
+  select(ps_station_id, lat = lat_in, lon = lon_in, location) %>% 
+  mutate(method = "Dropcams")
+
+dscm <- dscm |> 
+  filter(ps_station_id != "PLW_2024_dscm_01")
+```
+
+```{r dscm}
+pcam <- readxl::read_xlsx(file.path(NAS_path, "data/pelagics/PLW_2024_pelagics_fieldbook.xlsx")) %>% 
+  janitor::clean_names() |> 
+  select(ps_station_id, lat = lat_in, lon = long_in, location) %>% 
+  mutate(method = "Pelagic BRUVs")
+```
+
+```{r dscm}
+uvs <- readxl::read_xlsx(file.path(NAS_path, "data/fish/PLW_2024_fish_fieldbook_AMF.xlsx")) %>% 
+  janitor::clean_names() |> 
+  select(ps_station_id, lat, lon,  location) %>% 
+  mutate(method = "In-water surveys")
+```
+
+```{r dscm}
+birds <- readxl::read_xlsx(file.path(NAS_path, "data/birds/PLW_2024_birds_fieldbook_2024_02_21.xlsx")) %>% 
+  janitor::clean_names() |> 
+  select(ps_station_id, lat = lat_start, lon = long_start,  location) %>% 
+  mutate(method = "Bird surveys")
+```
+
+```{r combine}
+tmp <- bind_rows(bruvs, dscm, pcam, uvs, birds) %>% 
+  filter(!is.na(lat)) |> 
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326)
+
+tmp |> 
+  sf::st_write(file.path(GD_path, 
+                         "data/primary/processed/exp_stations.shp"), 
+               append = F)
+```
+
+# Fish taxa
+
+```{r}
+sio_fish <- readxl::read_xlsx(file.path(exp_path, "data/secondary/raw/SIO fish/Fish_output_by_taxon Table.xlsx")) |> 
+  janitor::clean_names() |> 
+  set_names(c("taxon", "abundance", "biomass"))
+
+fish_taxa <- sio_fish |> 
+  distinct(taxon)
+
+fish_taxa$taxon <- str_remove(fish_taxa$taxon, "species")
+
+fish_taxa <- bdc::bdc_clean_names(fish_taxa$taxon) %>% 
+  janitor::clean_names() %>% 
+  select(taxon = scientific_name, 
+         taxon_clean = names_clean) %>% 
+  mutate(taxon_clean = coalesce(taxon_clean, 
+                                taxadb::clean_names(taxon, lowercase = F))) %>% 
+  distinct(taxon, taxon_clean) 
+
+fish_taxa$taxon_clean[fish_taxa$taxon == "Siganus vulpinis"] <- "Siganus vulpinus"
+fish_taxa$taxon_clean[fish_taxa$taxon == "Plectorhinchus chaetondonoides"] <- "Plectorhinchus chaetodonoides"
+fish_taxa$taxon_clean[fish_taxa$taxon == "Pictichromis porphyreus"] <- "Pictichromis porphyrea"
+
+fish_taxa |> 
+  filter(taxon != taxon_clean)
+
+fish_taxa <- fish_taxa |> 
+  filter(taxon != "Pterocaesio cf. lativittata")
+```
+
+```{r worms}
+taxonomy_worms <- fish_taxa$taxon_clean %>% 
+  split(ceiling(seq_along(fish_taxa$taxon_clean)/20)) %>% 
+  furrr::future_map_dfr(worrms::wm_records_names) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(scientificname)) %>% 
+  mutate(rank = str_to_lower(rank),
+         taxon_id = if_else(!is.na(valid_aphia_id),
+                              paste0("WORMS:", valid_aphia_id),
+                              NA_character_)) %>% 
+  select(taxon_clean = scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, taxon_authority = valid_authority, kingdom, phylum, class, order, family, genus) %>% 
+  distinct()
+
+duped_taxa_worms <- taxonomy_worms %>% 
+  janitor::get_dupes(taxon_clean) 
+
+deduped_taxa_worms <- duped_taxa_worms %>% 
+  filter(status %in% c("accepted")) %>% 
+  select(-dupe_count)
+
+taxonomy_worms <- taxonomy_worms %>% 
+  group_by(taxon_clean) %>% 
+  filter(n() <= 1) %>% # remove duplicates
+  bind_rows(deduped_taxa_worms) # add deduped
+
+taxonomy_worms %>% 
+  filter(taxon_valid_name != taxon_clean)
+
+fish_taxa <- fish_taxa |> 
+  left_join(taxonomy_worms)|> 
+  select(-taxon_clean)
+
+fish_taxa |> filter(is.na(taxon_valid_name))
+```
+
+```{r}
+fish_codes <- fish_taxa |> 
+  distinct(taxon, taxon_valid_name, genus) |> 
+  mutate(vernacular = word(taxon_valid_name, 2)) |> 
+  filter(!is.na(genus)) 
+
+fish_codes$vernacular[fish_codes$vernacular == ""] <- NA
+
+fish_codes <- fish_codes |> 
+  mutate(ps_taxon_code = if_else(!is.na(vernacular), 
+                                str_to_upper(paste(str_sub(genus, 1, 2),
+                                                   str_sub(word(taxon, 2), 1, 4),
+                                                   sep = ".")),
+                                str_to_upper(paste(str_sub(genus, 1, 4),
+                                                   "SP",
+                                                   sep = "."))))
+
+dupes <- fish_codes |> 
+  select(ps_taxon_code, taxon, taxon_valid_name) |> 
+  janitor::get_dupes(ps_taxon_code)
+
+fish_codes <- fish_codes |> 
+  anti_join(dupes)
+
+fish_taxa <- fish_taxa |> 
+  left_join(fish_codes) 
+```
+
+```{r}
+fish_taxa |> 
+  distinct(ps_taxon_code, taxon, taxon_valid_name) |> 
+  filter(is.na(ps_taxon_code))
+```
+
+
+```{r}
+pacific_list <- read_csv(file.path(exp_path, "data/primary/raw/fish/pacific_taxa_list.csv"))
+
+dupes <- dupes |> 
+  left_join(pacific_list) |> 
+  select(ps_taxon_code = taxon_code, taxon, taxon_valid_name)
+
+fish_taxa <- fish_taxa |> 
+  distinct(ps_taxon_code, taxon, taxon_valid_name) |> 
+  filter(!is.na(ps_taxon_code)) |> 
+  bind_rows(dupes)
+
+fish_taxa |> 
+  arrange(desc(taxon)) |> 
+  filter(is.na(ps_taxon_code))
+  write_csv(file.path(exp_path, "data/primary/raw/fish/PLW_2024_fish_fieldbook.csv"))
+```
