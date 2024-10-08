@@ -25,49 +25,63 @@ knitr::opts_chunk$set(eval = F, warning = F, message = F, include = F, echo = F)
 #PristineSeasR::set_ps_paths(email = "kmillage@ngs.org")
 ps_science_path <- "/Users/kat/Library/CloudStorage/GoogleDrive-kmillage@ngs.org/My Drive/Pristine Seas/SCIENCE"
 
-# Path to GD folder for this expedition
+# Path to GD folder for this expedition (onboard Argo or remotely)
 GD_path <-  file.path(ps_science_path, "expeditions", "PNG-2024")
 
-# Path to the NAS (if on the boat)
-NAS_path <- "/Volumes/exp-Palau-2024/"
+# Path to the NAS folder for this expedition (onboard Argo only)
+NAS_path <- "/Volumes/exp-PNG-2024/"
 
-# Path to the external G-Drive
-HD_path <- "/Volumes/PLW-2024 2/"
+# Path to the external G-Drive for this expedition (onboard Argo or remotely)
+HD_path <- "/Volumes/PNG-2024-2/"
+
+# Where does the data live that we're working with?
+where_is_dat <- "GD"
 ```
 
-# Create Directories
+<!-- # Create Directories -->
 
-This section can be used to automatically create properly named folders for the seabed BRUV deployments if desired. 
+<!-- This section can be used to automatically create properly named folders for the seabed BRUV deployments if desired.  -->
 
-```{r}
-# Check 
-file.exists(file.path(HD_path, "data/primary/raw/bruvs/deployments/"))
+<!-- ```{r} -->
+<!-- # Check  -->
+<!-- file.exists(file.path(HD_path, "data/primary/raw/bruvs/deployments/")) -->
 
-paste0(file.path(HD_path, "data/primary/raw/bruvs/deployments/", "PLW-2024-bruvs")) %>% 
-  paste(as.vector(outer(formatC(seq(59,62), width = 2, flag = 0),
-                        c("L", "R"), 
-                        paste0)),
-        sep = "-") %>% 
-  purrr::map(dir.create)
-```
+<!-- paste0(file.path(HD_path, "data/primary/raw/bruvs/deployments/", "PLW-2024-bruvs")) %>%  -->
+<!--   paste(as.vector(outer(formatC(seq(59,62), width = 2, flag = 0), -->
+<!--                         c("L", "R"),  -->
+<!--                         paste0)), -->
+<!--         sep = "-") %>%  -->
+<!--   purrr::map(dir.create) -->
+<!-- ``` -->
 
 # Expedition Metadata 
 
-This section reads in and combines the metadata files for all methods. 
+## Combine 
+
+```{r}
+# Which location are we working with? 
+if(where_is_dat == "GD"){
+  dat_path <- file.path(GD_path, "data/primary/raw")
+}else if(where_is_dat == "NAS"){
+  dat_path <- file.path(NAS_path, "data")
+}else if(where_is_dat == "HD"){
+ dat_path <- file.path(HD_path, "data")
+}
+
+# Methods to include
+methods <- c("benthos", "birds", "bruvs", "dscm", "edna", "fish", "sub")
+```
 
 ```{r bruvs}
-bruvs <- readxl::read_xlsx(file.path(NAS_path, "data/bruvs/PLW_2024_bruvs_fieldbook.xlsx")) %>% 
-  select(ps_station_id, lat, lon, location) %>% 
+bruvs <- readxl::read_xlsx(file.path(dat_path, "bruvs/PNG_2024_bruvs_fieldbook.xlsx")) %>% 
+  select(ps_station_id, lat = latitude, lon = longitude, location) %>% 
   mutate(method = "Benthic BRUVs")
 ```
 
 ```{r dscm}
-dscm <- readxl::read_xlsx(file.path(NAS_path, "data/dscm/PLW_2024_dscm_fieldbook.xlsx")) %>% 
+dscm <- readxl::read_xlsx(file.path(dat_path, "dscm/PNG_2024_dscm_fieldbook.xlsx")) %>% 
   select(ps_station_id, lat = lat_in, lon = lon_in, location) %>% 
   mutate(method = "Dropcams")
-
-dscm <- dscm |> 
-  filter(ps_station_id != "PLW_2024_dscm_01")
 ```
 
 ```{r dscm}
@@ -101,6 +115,8 @@ tmp |>
                          "data/primary/processed/exp_stations.shp"), 
                append = F)
 ```
+
+## Summary Table and Map
 
 # Fish taxa
 
