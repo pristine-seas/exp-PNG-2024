@@ -1,0 +1,1124 @@
+---
+title: "Exploratory Analysis of Fish Survey Data"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: right
+    code-fold: true
+    theme: cosmo
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
+options(scipen = 999)
+
+# Hook to format inline numeric expressions with comma separators:
+knitr::knit_hooks$set(inline = function(x) {
+  if (!is.numeric(x)) {
+    # For non-numeric values, just return as character
+    return(as.character(x))
+  }
+  # Format numbers with comma as big.mark, no scientific notation
+  format(x, big.mark = ",", scientific = FALSE)
+})
+
+library(PristineSeasR)
+library(sf)
+library(hms)
+library(readxl)
+library(janitor)
+library(lubridate)
+library(gt)
+library(pointblank)
+library(bigrquery)
+library(leaflet)
+library(leaflet.extras)
+library(lme4)
+library(lmerTest)   # gives p-values for fixed effects
+library(emmeans)
+library(emmeans)
+library(multcomp)
+library(multcompView)
+library(multcomp)
+library(reactable)
+library(scales)
+library(reactablefmtr)
+library(parameters)
+library(tidyverse)
+
+ggthemr::ggthemr("fresh")
+
+ps_paths <- PristineSeasR::get_sci_drive_paths()
+
+exp_id <- "PNG_2024"
+
+exp_path <- file.path(ps_paths$expeditions, str_replace(exp_id, "_", "-"))
+
+bigrquery::bq_auth(email = "marine.data.science@ngs.org")
+
+bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas")
+```
+
+# Introduction
+
+This document presents an exploratory analysis of fish survey data collected during the PNG-2024 scientific expedition. Our goal is to characterize patterns in reef fish community structure and composition, and to identify key drivers of species richness, abundance, and biomass across spatial and ecological gradients.
+
+The dataset comprises standardized underwater visual survey (UVS) data collected across multiple islands, regions, and depth strata using consistent belt transect methods. Observers recorded individual fish counts, estimated lengths, and species-level taxonomic identifications. These were used to derive metrics of abundance (individuals per m²), biomass (grams per m²), and species richness per station.
+
+```{r}
+# -- Read supporting site data --------------------------------------------
+
+sites <- read_rds(file.path(exp_path, "data/primary/processed/sites.rds"))
+
+uvs_sites <- sites$uvs
+
+# Load pre-processed fish data --------------------------------------------
+
+fish_lut <- read_csv(file.path(ps_paths$projects, "prj-legacy-db/data/processed/taxa/taxa_luts.uvs_fish_pacific.csv"),
+                     show_col_types = FALSE) 
+
+load(file = file.path(exp_path, "data", "primary", "processed", "fish", "fish_staging.RData"))
+
+# Are there any data filters??
+
+biomass_by_station_and_taxa <- biomass_by_station_and_taxa |> 
+  filter(!str_detect(common_family, "blennie|gobie"))
+
+biomass_per_obs <- biomass_per_obs |> 
+  filter(!str_detect(common_family, "blennie|gobie"))
+
+# --- Station-level summary -----------------------------------------------
+
+region_lookup <- stations |> distinct(ps_site_id, region)
+
+station_summary <- biomass_by_station_and_taxa |> 
+  group_by(ps_site_id, ps_station_id, depth_strata) |> 
+  summarize(n_taxa         = n_distinct(accepted_aphia_id[avg_count > 0]),
+            total_count    = sum(total_count),
+            avg_count      = sum(avg_count),
+            avg_count_m2   = sum(avg_count_m2),
+            avg_biomass_m2 = sum(avg_biomass_m2),
+            .groups = "drop") |> 
+  left_join(stations |> 
+              distinct(ps_site_id, ps_station_id, region, subregion, locality, habitat, exposure, n_transects),
+            by = c("ps_site_id", "ps_station_id")) |> 
+  mutate(across(c(avg_count, avg_count_m2, avg_biomass_m2), 
+                ~round(.x, 4))) |> 
+  select(region, subregion, locality, ps_site_id, ps_station_id, depth_strata, n_transects,
+         n_taxa, total_count, avg_count, avg_count_m2, avg_biomass_m2,  habitat, exposure) 
+```
+
+In total, we conducted surveys at `r n_distinct(stations$ps_site_id)` sites and `r n_distinct(stations$ps_station_id)` stations across `r n_distinct(stations$region)` regions, covering approximately `r sum(stations$area_m2)` m² of reef habitat (@tbl-fish-stations, @fig-map).
+
+```{r}
+#| label: fig-map
+#| fig-cap: "Map of fish survey stations"
+#| 
+# Habitat map
+habitat_pal <- c("fore reef"  = "#C5FFFD",
+                 "back reef"  = "#DF2935",
+                 "channel"    = "#D8CC34",
+                 "patch reef" = "#772D8B")
+
+stations_sf <- stations |>
+  left_join(uvs_sites |> 
+              select(ps_site_id, latitude, longitude),
+            by = "ps_site_id") |>
+  mutate(habitat = factor(habitat, levels = names(habitat_pal))) |>
+  group_by(ps_site_id, region, subregion, locality, habitat, exposure, latitude, longitude) |> 
+  summarize(team = paste(unique(diver), collapse = "/"),
+            strata = paste(unique(paste(depth_strata, " (",depth_m ,"m)", sep = "")), 
+                            collapse = "\n"),
+            surveyed_area = sum(area_m2),
+            n_stations = n_distinct(ps_station_id),
+            .groups = "drop") |>
+  sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326) 
+
+mapview::mapview(stations_sf,
+                 zcol = "habitat",
+                 legend = TRUE,
+                 col.regions = habitat_pal,
+                 map.types = "Esri.WorldImagery",
+                 layer.name = "Habitat",
+                 popup = leafpop::popupTable(stations_sf, 
+                                             zcol = c("ps_site_id", "strata", "team", "surveyed_area", "habitat", "exposure"))) |> 
+  leafem::addMouseCoordinates() |> 
+  addFullscreenControl()
+```
+
+```{r}
+#| label: tbl-fish-stations
+#| tbl-cap: "Number of fish survey stations by habitat and depth strata"
+#| 
+stations |> 
+  group_by(region, habitat, depth_strata) |>
+  summarise(n = n_distinct(ps_station_id), .groups = "drop") |> 
+  pivot_wider(names_from = habitat, values_from = n, values_fill = 0) |> 
+  mutate(Total = rowSums(across(where(is.numeric)), na.rm = TRUE)) |>
+  gt(groupname_col = "region") |> 
+  tab_header(title = "Summary of sampling effort by region",
+             subtitle = "Number of stations surveyed by depth strata and habitat") |>
+  tab_spanner(label = "Reef Habitats", 
+              columns = c("fore reef", "back reef", "channel", "patch reef")) |> 
+  tab_style(style = list(cell_fill(color = "#f0f0f0"),
+                         cell_text(weight = "bold")),
+            locations = list(cells_column_labels(everything()),
+                             cells_column_spanners(spanners = "Reef Habitats"))) |>
+  opt_table_font(font = list(gt::google_font("Roboto"), default_fonts())) |>
+  opt_row_striping() |> 
+  tab_options(row_group.as_column = T,
+              table.width = pct(100),
+              table.font.size = "small") |> 
+  opt_vertical_padding(scale = 0.7) |> 
+    tab_source_note(source_note = "Depth stratum: supershallow (< 6 m), shallow (7 - 15 m), and deep (>= 15 m).") 
+```
+
+Subsequent sections will summarize the data by region and subregion, characterize the dominant taxa, evaluate sampling sufficiency, and explore spatial and ecological drivers of richness, abundance, biomass, and community structure.
+
+# Summary 
+
+## Regional summary
+
+The tables below (@tbl-region-summary, @tbl-subregion-summary) summarize survey coverage and observed patterns in species richness and abundance across regions and subregions. Metrics include the number of stations surveyed, total fish counted, and average richness, abundance, and biomass per station.
+
+These summaries reveal distinct regional patterns in reef fish communities. Lovongai recorded the highest species richness and the greatest average fish biomass per station. In contrast, Murat exhibited the lowest richness and biomass. The Western Islands showed the highest fish abundance, but average biomass per station was comparable to Murat, suggesting smaller-bodied species dominate. Manus had the lowest overall abundance.
+
+In the following sections, we explore spatial and ecological patterns in species richness, abundance, and biomass, focusing on variation across region, depth strata, and observer.
+
+```{r}
+# --- Region-level summary -----------------------------------------------
+region_summary <- station_summary |> 
+  group_by(region) |> 
+  summarize(n_stations = n_distinct(ps_station_id),
+            total_count = sum(total_count),
+            avg_taxa = round(mean(n_taxa)),
+            avg_count = round(mean(avg_count)),
+            avg_count_m2 = mean(avg_count_m2),
+            avg_biomass_m2 = mean(avg_biomass_m2),
+            .groups = "drop")
+
+n_taxa_by_region <- biomass_by_station_and_taxa |>
+  left_join(region_lookup) |>
+  group_by(region) |> 
+  summarise(n_taxa = n_distinct(accepted_aphia_id[avg_count > 0]),
+            .groups = "drop") 
+
+region_summary <- region_summary |> 
+  left_join(n_taxa_by_region) |> 
+  relocate(n_taxa, .after = n_stations) 
+```
+
+```{r}
+#| label: tbl-region-summary
+#| tbl-cap: "Summary of fish surveys by region"
+
+region_summary |> 
+  mutate(across(where(is.numeric), ~round(.x, 2)),
+         total_count = scales::comma(total_count)) |> 
+  gt(rowname_col = "region") |> 
+  tab_header(title = "Summary of Fish Surveys by Region",
+             subtitle = "Average counts and biomass per station") |> 
+  cols_label(n_stations = "Stations",
+             n_taxa = "Taxa Observed",
+             total_count = "Total Individuals",
+             avg_count = "Avg. Count",
+             avg_taxa = "Avg. Nº Taxa",
+             avg_count_m2 = "Avg. Count (per m²)",
+             avg_biomass_m2 = "Avg. Biomass (g/m²)") |> 
+  tab_style(style = list(cell_fill(color = "#f0f0f0"),
+                         cell_text(weight = "bold")),
+            locations = cells_column_labels(everything())) |>
+  opt_table_font(font = list(gt::google_font("Roboto"), default_fonts())) |>
+  opt_row_striping() |> 
+  tab_options(row_group.as_column = T,
+              table.width = pct(100),
+              table.font.size = "small") |> 
+  opt_vertical_padding(scale = 0.7)
+```
+
+```{r}
+# --- Subregion-level summary -----------------------------------------------
+
+subregion_summary <- station_summary |> 
+  group_by(region, subregion) |> 
+  summarize(n_stations = n_distinct(ps_station_id),
+            total_count = sum(total_count),
+            avg_taxa = round(mean(n_taxa)),
+            avg_count = round(mean(avg_count)),
+            avg_count_m2 = mean(avg_count_m2),
+            avg_biomass_m2 = mean(avg_biomass_m2),
+            .groups = "drop")
+
+n_taxa_by_subregion <- biomass_by_station_and_taxa |>
+  left_join(stations |> distinct(ps_site_id, region, subregion)) |>
+  group_by(subregion) |> 
+  summarise(n_taxa = n_distinct(accepted_aphia_id[avg_count > 0]),
+            .groups = "drop") 
+
+subregion_summary <- subregion_summary |> 
+  left_join(n_taxa_by_subregion) |> 
+  relocate(n_taxa, .after = n_stations) 
+```
+
+```{r}
+#| label: tbl-subregion-summary
+#| tbl-cap: "Summary of fish surveys by subregion"
+
+subregion_summary |> 
+  mutate(across(where(is.numeric), ~round(.x, 2)),
+         total_count = scales::comma(total_count)) |> 
+  gt(groupname_col = "region",
+     rowname_col = "subregion") |> 
+  tab_header(title = "Summary of Fish Surveys by Island",
+             subtitle = "Average counts and biomass per station") |> 
+  cols_label(n_stations = "Stations",
+             n_taxa = "Taxa Observed",
+             total_count = "Total Individuals",
+             avg_taxa = "Avg. Nº Taxa",
+             avg_count = "Avg. Count",
+             avg_count_m2 = "Avg. Count (per m²)",
+             avg_biomass_m2 = "Avg. Biomass (g/m²)") |> 
+  tab_style(style = list(cell_fill(color = "#f0f0f0"),
+                         cell_text(weight = "bold")),
+            locations = cells_column_labels(everything())) |>
+  opt_table_font(font = list(gt::google_font("Roboto"), default_fonts())) |>
+  opt_row_striping() |> 
+  tab_options(row_group.as_column = T,
+              table.width = pct(100),
+              table.font.size = "small") |> 
+  opt_vertical_padding(scale = 0.7)
+```
+
+## Taxonomic summary
+
+```{r}
+# --- Taxon-level summary -----------------------------------------------
+
+taxa_summary <- biomass_by_station_and_taxa |> 
+  group_by(trophic_group, order, family, accepted_name) |> 
+  summarise(total_count = sum(total_count),
+            avg_length_wm = round(mean(avg_length_wm, na.rm = T)),
+            avg_count = mean(avg_count),
+            freq_obs = round(100*sum(avg_count_m2 > 0)/n(),2),
+            across(c("avg_biomass_m2","avg_count_m2"), mean, na.rm = T),
+            .groups = "drop") |> 
+  left_join(biomass_per_obs |> 
+              group_by(accepted_name) |> 
+              summarize(min_tl_cm = min(avg_length),
+                        max_tl_cm = max(avg_length),
+                        .groups = "drop")) |> 
+  mutate(across(c(freq_obs, avg_count, avg_biomass_m2, avg_count_m2), ~round(.x, 6))) 
+
+# --- Family - level summary -------------------------------------
+
+biomass_by_station_and_family <- biomass_by_station_and_taxa |>
+  group_by(ps_station_id, order, family) |>
+  summarise(total_count    = sum(total_count), 
+            avg_count      = sum(avg_count),
+            avg_count_m2   = sum(avg_count_m2),
+            avg_biomass_m2 = sum(avg_biomass_m2),
+            .groups = "drop")
+
+family_summary <- biomass_by_station_and_family |> 
+  group_by(order, family) |> 
+  summarise(freq_obs       = round(100 * n_distinct(ps_station_id[avg_count_m2 > 0]) / n_distinct(ps_station_id),1),,
+            avg_count      = round(mean(avg_count), 3),
+            avg_count_m2   = mean(avg_count_m2),
+            avg_biomass_m2 = mean(avg_biomass_m2),
+            .groups = "drop") |>
+  left_join(biomass_by_station_and_taxa |>
+              group_by(order, family) |>
+              summarise(total_count = round(sum(total_count)),
+                        n_taxa     = n_distinct(accepted_name[avg_count_m2 > 0]),
+                        .groups = "drop"),
+            by = c("order", "family")) |>
+  mutate(across(c(avg_count, avg_count_m2, avg_biomass_m2), round, 6)) |> 
+  select(order, family, n_taxa, total_count, everything())
+```
+
+During the expedition, we recorded a total of `r sum(biomass_per_obs$count)` individual fish across **`r n_distinct(biomass_per_obs$accepted_aphia_id)`** distinct taxa during standardized transect surveys. Species richness varied across regions with Lovongai exhibiting the highest number of taxa  (`r region_summary$n_taxa[region_summary$region == "Lovongai"]` species), followed by the Western Islands and Manus. Murat showed the lowest regional richness, with only `r region_summary$n_taxa[region_summary$region == "Murat"]` species observed.
+
+```{r treemap, include = T, eval = T}
+#| label: fig-richness-treemap
+#| fig-cap: "Number of fish species by order and family"
+library(highcharter)
+
+lvl_opts <-  list(list(level = 1,
+                       borderWidth = 0,
+                       borderColor = "transparent",
+                       dataLabels = list(enabled = TRUE,
+                                         align = "left",
+                                         verticalAlign = "top",
+                                         style = list(fontSize = "12px", 
+                                                      textOutline = FALSE,
+                                                      color = "#FFFCF9",
+                                                      fontWeight = "bold"))),
+                  list(level = 2,
+                       borderWidth = 0,
+                       borderColor = "transparent",
+                       colorVariation = list(key = "brightness", to = 0.250),
+                       dataLabels = list(enabled = FALSE),
+                       style = list(fontSize = "9px",
+                                    textOutline = FALSE, 
+                                    color = "#FFFCF9", 
+                                    fontWeight = "bold")))
+
+hc_data <- taxa_summary |> 
+  mutate(n = 1) |> 
+  mutate_if(is.numeric, round,2) |> 
+  data_to_hierarchical(c(order, family), n)
+
+diversity_treemap <- hchart(hc_data,
+                            type = "treemap",
+                            allowDrillToNode = TRUE,
+                            levels = lvl_opts,
+                            tooltip = list(valueDecimals = FALSE)) |> 
+  hc_chart(style = list(fontFamily = "Roboto")) |> 
+  hc_title(text = "Number of fish species by order and family",
+           align = "left",
+           style = list(fontFamily = "Roboto", fontSize = "22px")) |> 
+  hc_size(height = 500)
+
+diversity_treemap
+```
+
+The most taxonomically rich families in our surveys were **Labridae** (wrasses, n = 80), and **Pomacentridae** (surgeonfishes, n = 78), followed by **Chaetodontidae** (butterflyfishes, n = 35) ,**Acanthuridae** (surgeonfishes, n = 32) and **Scaridae** (parrotfishes, 31) (@tbl-family-summary)
+
+```{r}
+#| label: tbl-family-summary
+#| tbl-cap: "Summary of fish families observed during the expedition"
+
+# Custom theme based on nytimes but with normal header casing
+custom_tbl_theme <- reactableTheme(
+  backgroundColor = "#ffffff",
+  borderColor = "#e0e0e0",
+  stripedColor = "#f9f9f9",
+  highlightColor = "#f0f0f0",
+  cellPadding = "2px",
+  style = list(fontFamily = "Roboto", fontSize = "13px"),
+  headerStyle = list(background = "#efefef",
+                     fontWeight = "bold",
+                     fontSize = "13px",
+                     textTransform = "none",   # <- disables all caps
+                     color = "black"))
+
+# Prepare data
+family_summary_tbl <- family_summary |>
+  mutate(`Taxa Observed`        = n_taxa,
+         `Total Count`    = total_count,
+         `Avg. Count`           = round(avg_count, 2),
+         `Freq. Occurrence (%)` = round(freq_obs, 1),
+         `Avg. Abundance (ind/m²)`      = round(avg_count_m2, 4),
+         `Avg. Biomass (g/m²)`  = round(avg_biomass_m2, 4)) |>
+  select(order, family, `Taxa Observed`, `Total Count`, `Avg. Count`, 
+         `Freq. Occurrence (%)`, `Avg. Abundance (ind/m²)`, `Avg. Biomass (g/m²)`)
+
+# Build table
+reactable(family_summary_tbl,
+          filterable      = TRUE,
+          pagination      = TRUE,
+          defaultPageSize = 10,
+          striped         = TRUE,
+          highlight       = TRUE,
+          defaultSorted   = list(`Taxa Observed`  = "desc"),
+          theme           = custom_tbl_theme,
+          columns         = list(order                  = colDef(name = "Order", minWidth = 150),
+                                 family                 = colDef(name = "Family", minWidth = 150),
+                                 `Freq. Occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
+                                 `Avg. Biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
+                                 `Avg. Abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |> 
+  add_title("Fish Families") |> 
+  add_subtitle("Summary of fish families observed during the expedition",
+               font_size = 20,
+               font_color = '#666666',
+               margin = reactablefmtr::margin(t=10,r=0,b=15,l=0))
+```
+
+Some of the most commonly encountered species includede the bluestreak cleaner wrasse (*Labroides dimidiatus*, observed at 87% of stations), twospot surgeonfish (*Ctenochaetus binotatus*, 76%), and bicolor chromis (*Pycnochromis margaritifer*, 75%)(@tbl-spp-summary). These species were widespread across depth strata and regions.
+
+In terms of numerical abundance, the most dominant taxa were the ternate chromis (*Chromis ternatensis*, 0.84 ind/m²), bicolor chromis (*P. margaritifer*, 0.73 ind/m²), and the darkfin chromis (*Pycnochromis atripes*, 0.43 ind/m²). 
+
+Biomass was dominated by larger-bodied taxa such as the sleek unicornfish (*Naso hexacanthus*, 25 g/m²), bigeye trevally (*Caranx sexfasciatus*, 22 g/m²), and rainbow runner (*Elagatis bipinnulata*, 17 g/m²), all of which contributed significantly to overall fish biomass despite lower numerical abundance. 
+
+We explore differences in community composition across regions in the next sections. 
+
+```{r}
+#| label: tbl-spp-summary
+#| tbl-cap: "Summary of fish species observed during the expedition"
+#| 
+# Prepare data
+taxa_summary_tbl <- taxa_summary |> 
+  rename(`Avg. length (cm)`        = avg_length_wm,
+         `Total count`             = total_count,
+         `Accepted name`           = accepted_name,
+         `Trophic group`           = trophic_group) |> 
+  mutate(`Length range (cm)`       = paste0(min_tl_cm, "–", max_tl_cm),
+         `Avg. count`              = round(avg_count, 2),
+         `Freq. occurrence (%)`    = round(freq_obs, 1),
+         `Avg. abundance (ind/m²)` = round(avg_count_m2, 4),
+         `Avg. biomass (g/m²)`     = round(avg_biomass_m2, 4)) |>
+  select(family, `Accepted name`, `Trophic group`, `Length range (cm)`, `Avg. length (cm)`,
+         `Total count`, `Avg. count`, `Freq. occurrence (%)`,
+         `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`)
+
+# Build interactive table
+reactable(taxa_summary_tbl,
+          filterable      = TRUE,
+          pagination      = TRUE,
+          defaultPageSize = 10,
+          striped         = TRUE,
+          highlight       = TRUE,
+          defaultSorted   = list(`Total count` = "desc"),
+          theme           = custom_tbl_theme,
+          columns = list(family                     = colDef(name = "Family", minWidth = 150),
+                         `Accepted name`            = colDef(name = "Accepted name",
+                                                             cell = function(value) htmltools::tags$i(value),
+                                                             minWidth = 180),
+                         `Freq. occurrence (%)`     = colDef(cell = function(value) paste0(value, "%"), align = "center"),
+                         `Avg. biomass (g/m²)`      = colDef(cell = function(value) comma(value, accuracy = 0.001)),
+                         `Avg. abundance (ind/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
+  add_title("Fish species") |>
+  add_subtitle("Summary of fish species observed during the expedition",
+               font_size  = 20,
+               font_color = "#666666",
+               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
+```
+
+# Species Richness
+
+```{r}
+# To ensure consistent sampling effort and clean estimation of observer effects, we excluded four stations surveyed by dual diver teams. These represented <3% of stations and were not systematically distributed across sites or regions.”
+
+richness_by_station <- biomass_by_station_and_taxa |>
+  filter(!str_detect(common_family, "blennie|gobie")) |> 
+  left_join(stations) |> 
+  group_by(ps_site_id, ps_station_id, diver, region, subregion, n_transects,  depth_strata) |>
+  summarise(richness = n_distinct(accepted_aphia_id[avg_count > 0]), .groups = "drop") |> 
+  filter(!str_detect(diver, "/")) 
+```
+
+#### Did we sample enough?
+
+To assess the completeness of our species inventories across regions, we generated species accumulation curves using stations as the sampling unit (@fig-acc-curves). These curves provide insight into whether our sampling effort was adequate to capture the underlying diversity in each region. They also help evaluate whether observed differences in species richness reflect genuine ecological patterns or are potentially driven by differences in survey effort or sampling completeness.
+
+```{r}
+#| label: fig-acc-curves
+#| fig-cap: "Species accumulation curves by region"
+#| fig-width: 8
+
+library(vegan)
+
+# Species matrix with one row per station × region
+
+spp_matrix <- biomass_by_station_and_taxa |> 
+  left_join(stations |> select(ps_station_id, region), by = "ps_station_id") |> 
+  filter(avg_count > 0) |> 
+  select(region, ps_station_id, accepted_name, avg_count) |> 
+  pivot_wider(names_from = accepted_name, values_from = avg_count, values_fill = 0) |> 
+  distinct(ps_station_id, .keep_all = TRUE) |>  # Keep one row per station
+  nest(data = -region)
+
+# 2. Species accumulation per region
+accum_curves <- spp_matrix |> 
+  mutate(acc = map(data, ~ specaccum(select(.x, where(is.numeric)), method = "random")),
+         curve = map(acc, ~ tibble(station_number = .x$sites,
+                                   richness = .x$richness,
+                                   sd = .x$sd))) |> 
+  select(region, curve) |> 
+  unnest(curve)
+
+# 3. Plot
+ggplot(accum_curves, aes(x = station_number, y = richness, color = region, fill = region)) +
+  geom_line(linewidth = 1) +
+  geom_ribbon(aes(ymin = richness - sd, ymax = richness + sd), alpha = 0.2, color = NA) +
+  labs(title = "Species Accumulation Curves by Region",
+       x = "Number of Stations",
+       y = "Accumulated Species Richness") +
+  theme_minimal(base_size = 14)+
+  theme(legend.position = "bottom")+
+  labs(fill = "", col = "")
+```
+
+The species accumulation curves for all four regions display a steady increase in observed richness with additional sampling effort, with none reaching a clear asymptote. This suggests that the species inventories from these surveys remain incomplete. Lovongai and Manus exhibit the steepest accumulation trajectories, indicating both higher species richness and potentially greater under-sampling relative to their true diversity. In contrast, the slower but still-rising curves for Murat and the Western Islands imply lower overall richness but similarly incomplete sampling coverage.
+
+#### Differences across depth strata, divers, and regions?
+
+Let look at some initial exploratory plots of species richness by depth strata, diver, and region.
+
+::: {.panel-tabset}
+
+###### Depth strata
+
+```{r , include = T, eval = T}
+#| label: fig-diversity-by-depth
+#| fig-cap: "Species richnnes by depth strata"
+#| fig-width: 9
+
+ggstatsplot::ggbetweenstats(data = richness_by_station, 
+                            x = depth_strata, 
+                            y = richness, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Species richness by depth strata", 
+                            xlab = "", ylab = "Number of species per station")
+```
+
+###### Diver
+
+```{r , include = T, eval = T}
+#| label: fig-diversity-diver
+#| fig-cap: "Species richnnes by diver"
+#| fig-width: 9
+ggstatsplot::ggbetweenstats(data = richness_by_station, 
+                            x = diver, 
+                            y = richness, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Species richness by diver", 
+                            xlab = "", ylab = "Number of species per station")
+```
+
+###### Region
+
+```{r , include = T, eval = T}
+#| label: fig-diversity-region
+#| fig-cap: "Species richnnes by region"
+#| fig-width: 9
+ggstatsplot::ggbetweenstats(data = richness_by_station, 
+                            x = region, 
+                            y = richness, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Species richness by region", 
+                            xlab = "", ylab = "Number of species per station")
+```
+
+:::
+
+To investigate the drivers of species richness across stations, we fit a linear mixed-effects model with region, depth, diver, and sampling effort as predictors, accounting for repeated observations within sites (@tbl-richness-params).
+
+```{r}
+#| label: tbl-richness-params
+#| tbl-cap: "Model estimates for species richness"
+
+spp_model <- lmer(richness ~ n_transects + depth_strata + diver +  region  + (1 | ps_site_id),
+                  data = richness_by_station)
+
+# Extract results
+spp_model_anova <- anova(spp_model)
+spp_model_summary <- summary(spp_model)
+spp_model_emm_diver <- emmeans(spp_model, pairwise ~ diver, adjust = "tukey")
+spp_model_emm_region <- emmeans(spp_model, pairwise ~ region, adjust = "tukey")
+
+model_parameters(spp_model, effects = "fixed") |> 
+  insight::format_table(ci_brackets = c("(", ")")) |> 
+  select(-Effects) |> 
+  gt() |> 
+  fmt_number(columns = where(is.numeric), decimals = 2) |> 
+  cols_label(Parameter = "Fixed Effect",
+             Coefficient = "Estimate",
+             p = "p-value") |> 
+  tab_header(title = "Model Estimates: Species Richness") |> 
+  tab_options(table.font.size = "small",
+    heading.title.font.size = "medium",
+    row.striping.include_table_body = TRUE) |> 
+  opt_row_striping()
+```
+
+#### Key findings
+
+The species richness model revealed strong observer effects (χ² = 8.8, p < 0.001) and modest but statistically significant differences across regions (χ² = 3.3, p = 0.024). Sampling effort (χ² = 42.9, p < 0.001) was, as expected, a major predictor of richness—indicating that increasing the number of transects substantially boosts the number of species detected. In contrast, depth strata had no discernible effect on richness (χ² = 0.08, p = 0.92), suggesting that species richness remained consistent across depth zones.
+
+Key findings:
+
+- **Sampling effort**: Richness increased strongly with the number of transects (β = 13.91, p < 0.001), confirming the expected positive relationship between effort and species detection.
+
+- **Observer effect**: Diver identity was the strongest predictor of species richness after sampling effort. Compared to Alan Friedlander (reference):
+
+  - Allison Green recorded ~12 fewer species per station on average (β = –12.10, p < 0.001),
+  
+  - Jenn Caselle recorded ~7 fewer species (β = –6.94, p = 0.072),
+  
+  - Estimated marginal means show the highest richness for Friedlander (58.0 spp), followed by Caselle (51.1), Green (45.9), McKinnis (43.1), and Summers (40.3).
+  
+    - Pairwise contrasts confirmed statistically significant differences between Friedlander and both Green (p < 0.001) and Summers (p = 0.028).
+
+- **Regional differences**: Species richness was modestly influenced by region (χ² = 3.3, p = 0.024).   
+
+  - Estimated marginal means indicate slightly lower richness in Murat (41.8 spp) compared to Lovongai (48.7), Manus (48.6), and the Western Islands (51.6).
+  - The pairwise difference between Murat and Western Islands approached significance (p = 0.055), suggesting a possible regional signal.
+
+::: {.panel-tabset}
+
+###### Diver
+
+```{r}
+#| label: fig-emmeans-by-diver
+#| fig-cap: "Estimated marginal means of species richness by diver, adjusted for differences in sampling effort, depth strata, and region (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
+#| fig-width: 9
+
+spp_model_emm_diver |> 
+  cld(adjust = "tukey", Letters = letters, alpha = 0.05) |> 
+  ggplot(aes(x = reorder(diver, emmean), y = emmean))+
+  geom_point()+
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2, color = "#F08A4B")+
+  geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
+  labs(title = "Estimated Species Richness by Diver",
+       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
+       x = NULL,
+       y = "Estimated richness (± 95% CI)") +
+  theme_minimal(base_size = 13) +
+  expand_limits(y = 0)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+###### Region 
+
+```{r}
+#| label: fig-emmeans-by-region
+#| fig-cap: "Estimated marginal means of species richness by region, adjusted for differences in sampling effort, depth strata, and region (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
+#| fig-width: 9
+#| 
+spp_model_emm_region |> 
+  cld(adjust = "tukey", Letters = letters, alpha = 0.05) |> 
+  ggplot(aes(x = reorder(region, emmean), y = emmean))+
+  geom_point()+
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2, color = "#065A82")+
+  geom_text(aes(label = .group), vjust = -1, hjust = 0.05, size = 5, fontface = "bold")+
+  labs(title = "Estimated Species Richness by Region",
+       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
+       x = NULL,
+       y = "Estimated richness (± 95% CI)") +
+  theme_minimal(base_size = 13) +
+  expand_limits(y = 0)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+:::
+
+# Abundance
+
+```{r}
+abundance_by_station <- biomass_by_station_and_taxa |>
+  filter(!str_detect(common_family, "blennie|gobie")) |> 
+  left_join(stations) |> 
+  group_by(ps_site_id, ps_station_id, diver, region, subregion, n_transects, depth_strata) |>
+  summarise(avg_count_m2 = sum(avg_count_m2), .groups = "drop") |> 
+  filter(!str_detect(diver, "/")) 
+```
+
+#### Differences across depth strata, divers, and regions?
+
+Let's begin by looking at some initial exploratory plots of numerical abundance by depth strata, diver, and region.
+
+::: {.panel-tabset}
+
+###### Depth strata
+
+```{r , include = T, eval = T}
+#| label: fig-abundance-by-depth
+#| fig-cap: "Numerical abundance by depth strata"
+#| fig-width: 9
+
+ggstatsplot::ggbetweenstats(data = abundance_by_station, 
+                            x = depth_strata, 
+                            y = avg_count_m2, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Numerical abundance by depth strata", 
+                            xlab = "", ylab = "Average abundance (ind/m2) per station")
+```
+
+###### Diver
+
+```{r , include = T, eval = T}
+#| label: fig-abundance-diver
+#| fig-cap: "Numerical abundance by diver"
+#| fig-width: 9
+#| 
+ggstatsplot::ggbetweenstats(data = abundance_by_station, 
+                            x = diver, 
+                            y = avg_count_m2, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Numerical abundance by diver", 
+                            xlab = "", ylab = "Average abundance (ind/m2) per station")
+```
+
+###### Region
+
+```{r , include = T, eval = T}
+#| label: fig-abundance-region
+#| fig-cap: "Numerical abundance by region"
+#| fig-width: 9
+#| 
+ggstatsplot::ggbetweenstats(data = abundance_by_station, 
+                            x = region, 
+                            y = avg_count_m2, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Numerical abundance by region", 
+                            xlab = "", ylab = "Average abundance (ind/m2) per station")
+```
+:::
+
+We modeled average fish abundance (individuals per m²) at the station level using a generalized linear mixed-effects model (GLMM) with a Gamma distribution and log link. The model included fixed effects for depth strata, diver, region, and sampling effort (number of transects), and a random intercept for site ID (@tbl-abund-params).
+
+```{r}
+#| label: tbl-abund-params
+#| tbl-cap: "Model estimates for numerical abundance"
+#| 
+library(glmmTMB)
+
+abund_model <- glmmTMB(avg_count_m2 ~ n_transects + depth_strata + diver + region + (1 | ps_site_id),
+                       family = Gamma(link = "log"),
+                       data = abundance_by_station)
+
+# Extract results
+abund_model_anova <- car::Anova(abund_model)
+abund_model_summary <- summary(abund_model)
+abund_model_emm_diver <- emmeans(abund_model, pairwise ~ diver, adjust = "tukey")
+abund_model_emm_region <- emmeans(abund_model, pairwise ~ region, adjust = "tukey")
+
+# Parameter estimates
+
+model_parameters(abund_model, effects = "fixed") |> 
+  insight::format_table(ci_brackets = c("(", ")")) |> 
+  select(-Effects, -df) |> 
+  gt() |> 
+  fmt_number(columns = where(is.numeric), decimals = 2) |> 
+  cols_label(Parameter = "Fixed Effect",
+             Coefficient = "Estimate",
+             p = "p-value") |> 
+  tab_header(title = "Model Estimates: Numerical Abundance") |> 
+  tab_options(table.font.size = "small",
+    heading.title.font.size = "medium",
+    row.striping.include_table_body = TRUE) |> 
+  opt_row_striping()
+```
+
+#### Key findings
+
+The abundance model revealed strong observer effects (χ² = 45.9, p < 0.001), a significant influence of depth strata (χ² = 9.1, p = 0.010), and moderate regional variation in fish abundance (χ² = 10.7, p = 0.013). Sampling effort (number of transects) had no detectable effect (χ² = 0.15, p = 0.70), indicating that the per-area standardization (ind/m²) effectively controls for variation in sampling intensity.
+
+Key findings:
+
+  - **Depth effect**: Shallow sites had ~21% higher abundance than deep sites (β = 0.19, p = 0.004).
+  - **Observer effect**: Diver identity had a strong influence on abundance estimates. Compared to Alan Friedlander (reference):
+    - Allison Green recorded ~41% lower abundance (β = –0.53, p < 0.001),
+    - Jenn Caselle recorded similar abundance (β = –0.05, p = 0.88),
+    - Estimated marginal means show abundance values of 5.3 ind/m² (Friedlander), 4.3 (Caselle), 3.1 (Green). 
+       - Significant pairwise differences were detected between Friedlander and Green (p < 0.001), Summers (p = 0.005), and McKinnis (p = 0.0003).
+  - **Regional differences**: Manus exhibited significantly lower abundance than the Western Islands (p = 0.013), while other pairwise contrasts were not statistically significant.
+    - Estimated marginal means indicate the highest abundance in the Western Islands (2.89 ind/m²), followed by Lovongai (2.50), Murat (2.31), and Manus (1.53).Although Lovongai and Murat had moderately higher abundance than Manus (1.6× and 1.5×, respectively), these differences were not significant after adjustment for multiple comparisons (@fig-emmeans-abundance-region).
+
+::: {.panel-tabset}
+
+###### Diver
+
+```{r}
+#| label: fig-emmeans-abundance-diver
+#| fig-cap: "Estimated marginal means of average numerical abundance by diver, adjusted for differences in sampling effort, depth strata, and region (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
+#| fig-width: 9
+#| 
+
+abun_model_emmeans <- emmeans(abund_model, pairwise ~ diver, type = "response")
+
+abun_model_emmeans$emmeans |>
+  cld(adjust = "tukey", Letters = letters, alpha = 0.05, type = "response") |> 
+  ggplot(aes(x = reorder(diver, response), y = response))+
+  geom_point()+
+  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, color = "#F08A4B")+
+  geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
+  labs(title = "Estimated Numerical Abundance by Diver",
+       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
+       x = NULL,
+       y = "Estimated Numerical Abundance (± 95% CI)") +
+  theme_minimal(base_size = 13) +
+  expand_limits(y = 0)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+###### Region
+
+```{r}
+#| label: fig-emmeans-abundance-region
+#| fig-cap: "Estimated marginal means of average numerical abundance by region, adjusted for differences in sampling effort, depth strata, and diver (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
+#| fig-width: 9
+abun_model_emmeans_diver <- emmeans(abund_model, pairwise ~ diver, type = "response")
+
+abun_model_emmeans <- emmeans(abund_model, pairwise ~ region, type = "response")
+
+abun_model_emmeans$emmeans |>
+  cld(adjust = "tukey", Letters = letters, alpha = 0.05, type = "response") |> 
+  ggplot(aes(x = reorder(region, response), y = response))+
+  geom_point()+
+  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, color = "#F08A4B")+
+  geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
+  labs(title = "Estimated Numerical Abundance by Region",
+       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
+       x = NULL,
+       y = "Estimated Numerical Abundance (± 95% CI)") +
+  theme_minimal(base_size = 13) +
+  expand_limits(y = 0)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+:::
+# Biomass
+
+```{r}
+biomass_by_station <- biomass_by_station_and_taxa |>
+  filter(!str_detect(common_family, "blennie|gobie")) |> 
+  left_join(stations) |> 
+  group_by(ps_site_id, ps_station_id, diver, region, subregion, n_transects, depth_strata) |>
+  summarise(avg_biomass_m2 = sum(avg_biomass_m2), .groups = "drop") |> 
+  filter(!str_detect(diver, "/")) 
+```
+
+#### Differences across depth strata, divers, and regions?
+
+Let's begin by looking at some initial exploratory plots of fish biomass by depth strata, diver, and region.
+
+::: {.panel-tabset}
+
+###### Depth strata
+
+```{r , include = T, eval = T}
+#| label: fig-biomass-by-depth
+#| fig-cap: "Fish biomass by depth strata"
+#| fig-width: 9
+
+ggstatsplot::ggbetweenstats(data = biomass_by_station, 
+                            x = depth_strata, 
+                            y = avg_biomass_m2, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Fish biomass by depth strata", 
+                            xlab = "", ylab = "Fish biomass (g/m2) per station")
+```
+
+###### Diver
+
+```{r , include = T, eval = T}
+#| label: fig-biomass-diver
+#| fig-cap: "Fish biomass by diver"
+#| fig-width: 9
+#| 
+ggstatsplot::ggbetweenstats(data = biomass_by_station, 
+                            x = diver, 
+                            y = avg_biomass_m2, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Fish biomass by diver", 
+                            xlab = "", ylab = "Fish biomass (h/m2) per station")
+```
+
+###### Region
+
+```{r , include = T, eval = T}
+#| label: fig-biomass-region
+#| fig-cap: "Fish biomass by region"
+#| fig-width: 9
+#| 
+ggstatsplot::ggbetweenstats(data = biomass_by_station, 
+                            x = region, 
+                            y = avg_biomass_m2, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Fish biomass by region", 
+                            xlab = "", ylab = "Fish biomass (g/m2) per station")
+```
+
+:::
+
+We modeled fish biomass (g/m²) at the station level using a generalized linear mixed-effects model (GLMM) with a Gamma distribution and log link. The model included fixed effects for depth strata, diver, region, and sampling effort (number of transects), and a random intercept for site ID (@tbl-biomass-params).
+
+```{r}
+#| label: tbl-biomass-params
+#| tbl-cap: "Model estimates for fish biomass"
+#| 
+
+biomass_model <- glmmTMB(avg_biomass_m2 ~ n_transects + depth_strata + diver + region + (1 | ps_site_id),
+                         family = Gamma(link = "log"),
+                         data = biomass_by_station)
+
+# Extract results
+
+biomass_model_anova <- car::Anova(biomass_model)
+biomass_model_summary <- summary(biomass_model)
+biomass_model_emm_diver <- emmeans(biomass_model, pairwise ~ diver, adjust = "tukey")
+biomass_model_emm_region <- emmeans(biomass_model, pairwise ~ region, adjust = "tukey")
+
+# Parameter estimates
+
+model_parameters(biomass_model, effects = "fixed") |> 
+  insight::format_table(ci_brackets = c("(", ")")) |> 
+  select(-Effects, -df) |> 
+  gt() |> 
+  fmt_number(columns = where(is.numeric), decimals = 2) |> 
+  cols_label(Parameter = "Fixed Effect",
+             Coefficient = "Estimate",
+             p = "p-value") |> 
+  tab_header(title = "Model Estimates: Fish biomass") |> 
+  tab_options(table.font.size = "small",
+    heading.title.font.size = "medium",
+    row.striping.include_table_body = TRUE) |> 
+  opt_row_striping()
+```
+
+#### Key findings
+
+The biomass model revealed strong observer effects (χ² = 25.5, p < 0.001), a significant influence of depth strata (χ² = 8.2, p = 0.016), and marginal regional variation in fish biomass (χ² = 7.5, p = 0.059). Sampling effort (number of transects) had no detectable effect (χ² = 0.93, p = 0.34), indicating that the per-area biomass standardization (g/m²) appropriately controls for effort-related variation.
+
+Key findings:
+
+  - **Depth effect**: Shallow sites had ~21% lower fish biomass than deep sites (β = –0.24, p = 0.007), contrasting with patterns observed in numerical abundance
+  - **Observer effect**: Diver identity had a strong influence on biomass estimates. Compared to Alan Friedlander (reference):
+    - Allison Green recorded ~35% lower biomass (β = –0.44, p = 0.003),
+    - Jenn Caselle recorded ~57% lower biomass (β = –0.84, p < 0.001).
+    - Estimated marginal means show biomass values of 357 g/m² (Friedlander), 231 g/m² (Green), and 155 g/m² (Caselle), with differences between Friedlander and both Green (p = 0.029) and Caselle (p = 0.007) statistically significant.
+  - **Regional differences**: Biomass in Murat was significantly lower than in Lovongai (β = –0.72, p = 0.009). Manus showed a non-significant negative trend, and the Western Islands did not differ from Lovongai.
+    - Estimated marginal means indicate highest biomass in Lovongai (178 g/m²), followed by the Western Islands (152 g/m²), Manus (129 g/m²), and Murat (87 g/m²). Only Murat was significantly different from Lovongai (@fig-emmeans-biomass-region) 
+
+::: {.panel-tabset}
+
+###### Diver
+
+```{r}
+#| label: fig-emmeans-biomass-diver
+#| fig-cap: "Estimated marginal means of average biomass by diver, adjusted for differences in sampling effort, depth strata, and region (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
+#| fig-width: 9
+
+biomass_model_emmeans_diver <- emmeans(biomass_model, pairwise ~ diver, type = "response")
+
+biomass_model_emmeans_diver$emmeans |>
+  cld(adjust = "tukey", Letters = letters, alpha = 0.05, type = "response") |> 
+  ggplot(aes(x = reorder(diver, response), y = response))+
+  geom_point()+
+  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, color = "#F08A4B")+
+  geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
+  labs(title = "Estimated Biomass by Diver",
+       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
+       x = NULL,
+       y = "Estimated Biomass (± 95% CI)") +
+  theme_minimal(base_size = 13) +
+  expand_limits(y = 0)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+###### Region 
+
+```{r}
+#| label: fig-emmeans-biomass-region
+#| fig-cap: "Estimated marginal means of average biomass by region, adjusted for differences in sampling effort, depth strata, and diver (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
+#| fig-width: 9
+
+biomass_model_emmeans <- emmeans(biomass_model, pairwise ~ region, type = "response")
+
+biomass_model_emmeans$emmeans |>
+  cld(adjust = "tukey", Letters = letters, alpha = 0.05, type = "response") |> 
+  ggplot(aes(x = reorder(region, response), y = response))+
+  geom_point()+
+  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, color = "#F08A4B")+
+  geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
+  labs(title = "Estimated Biomass by Region",
+       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
+       x = NULL,
+       y = "Estimated Biomass (± 95% CI)") +
+  theme_minimal(base_size = 13) +
+  expand_limits(y = 0)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+:::
+
+# Trophic Composition
+
+This section summarizes the distribution of biomass and abundance across major trophic groups, offering insight into the functional structure of reef fish assemblages across regions and depths.
+
+## Overall patterns
+	•	Contribution of each trophic group to total biomass and abundance (stacked bar plots).
+	•	Emphasize dominant groups (e.g. planktivores, herbivores, piscivores).
+	
+```{r}
+biomass_by_station_and_taxa |> 
+  group_by(ps_station_id, trophic_group) |> 
+  summarize(total_biomass_m2 = sum(avg_biomass_m2),
+            total_count_m2   = sum(avg_count_m2),
+            .groups = "drop") |> 
+  left_join(stations |> 
+              distinct(ps_station_id, region, subregion), 
+            by = "ps_station_id") |> 
+  group_by(region, subregion, trophic_group) |>
+  summarize(avg_biomass_m2 = mean(total_biomass_m2),
+            avg_count_m2   = mean(total_count_m2),
+            .groups = "drop") |> 
+  ggplot(aes(fct_reorder(subregion, avg_biomass_m2, sum, .desc = T), avg_biomass_m2, fill = trophic_group))+
+  geom_col()+
+  facet_wrap(~region, ncol = 4, scales = "free_x") +
+  labs(x = "", y = "Average biomass (g/m²)", fill = "",
+       title = "Average fish biomass by trophic group and region",
+       subtitle = "Stacked bar plots show the contribution of each trophic group to total biomass")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom",
+        legend.box = "horizontal")+
+  guides(fill = guide_legend(nrow = 1, byrow = TRUE))
+```
+
+```{r}
+biomass_by_station_and_taxa |> 
+  group_by(ps_station_id, trophic_group) |> 
+  summarize(total_biomass_m2 = sum(avg_biomass_m2),
+            total_count_m2   = sum(avg_count_m2),
+            .groups = "drop") |> 
+  left_join(stations |> 
+              distinct(ps_station_id, region, subregion), 
+            by = "ps_station_id") |> 
+  group_by(region, subregion, trophic_group) |>
+  summarize(avg_biomass_m2 = mean(total_biomass_m2),
+            avg_count_m2   = mean(total_count_m2),
+            .groups = "drop") |> 
+  ggplot(aes(fct_reorder(subregion, avg_count_m2, sum, .desc = T), avg_count_m2, fill = trophic_group))+
+  geom_col()+
+  facet_wrap(~region, ncol = 4, scales = "free_x") +
+  labs(x = "", y = "Average Abundance (in/m²)", fill = "",
+       title = "Average fish Abundance by trophic group and region",
+       subtitle = "Stacked bar plots show the contribution of each trophic group to total abundance")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom",
+        legend.box = "horizontal")+
+  guides(fill = guide_legend(nrow = 1, byrow = TRUE))
+```
+
+## spatial trends
+
+Regional comparisons of trophic structure (e.g. group-wise proportions per region).
+	•	Depth-stratified breakdowns, if patterns emerge.
+	
+# Community Structure
+
+
