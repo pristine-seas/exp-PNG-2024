@@ -37,6 +37,7 @@ library(pointblank)
 library(bigrquery)
 library(leaflet)
 library(leaflet.extras)
+library(glue)
 library(lme4)
 library(lmerTest)   # gives p-values for fixed effects
 library(emmeans)
@@ -123,6 +124,13 @@ habitat_pal <- c("fore reef"  = "#C5FFFD",
                  "back reef"  = "#DF2935",
                  "channel"    = "#D8CC34",
                  "patch reef" = "#772D8B")
+
+trophic_palette <- c("Herbivore/Detritivore" = "#5C9E5C",   # Earthy green (natural, calming)
+                     "Planktivore"            = "#4C9CB2",   # Soft teal-blue (planktivores)
+                     "Lower-carnivore"        = "#E1B07E",   # Sandy ochre (mid-level predator)
+                     "Top-predator"           = "#C75D4D",   # Muted brick red (assertive but not harsh)
+                     "Shark"                  = "#7E6FAB",   # Deep slate violet (distinctive, dignified)
+                     "NA"                     = "#D0D0D0")    # Light neutral gray (non-disruptive)
 
 stations_sf <- stations |>
   left_join(uvs_sites |> 
@@ -538,7 +546,6 @@ ggplot(accum_curves, aes(x = station_number, y = richness, color = region, fill 
   labs(title = "Species Accumulation Curves by Region",
        x = "Number of Stations",
        y = "Accumulated Species Richness") +
-  theme_minimal(base_size = 14)+
   theme(legend.position = "bottom")+
   labs(fill = "", col = "")
 ```
@@ -550,6 +557,23 @@ The species accumulation curves for all four regions display a steady increase i
 Let look at some initial exploratory plots of species richness by depth strata, diver, and region.
 
 ::: {.panel-tabset}
+
+###### Region
+
+```{r , include = T, eval = T}
+#| label: fig-diversity-region
+#| fig-cap: "Species richnnes by region"
+#| fig-width: 9
+ggstatsplot::ggbetweenstats(data = richness_by_station, 
+                            x = region, 
+                            y = richness, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Species richness by region", 
+                            xlab = "", ylab = "Number of species per station")
+```
 
 ###### Depth strata
 
@@ -583,23 +607,6 @@ ggstatsplot::ggbetweenstats(data = richness_by_station,
                             p.adjust.method = "holm",
                             type = "nonparametric",
                             title = "Species richness by diver", 
-                            xlab = "", ylab = "Number of species per station")
-```
-
-###### Region
-
-```{r , include = T, eval = T}
-#| label: fig-diversity-region
-#| fig-cap: "Species richnnes by region"
-#| fig-width: 9
-ggstatsplot::ggbetweenstats(data = richness_by_station, 
-                            x = region, 
-                            y = richness, 
-                            mean.ci = TRUE,
-                            pairwise.comparisons = TRUE,
-                            p.adjust.method = "holm",
-                            type = "nonparametric",
-                            title = "Species richness by region", 
                             xlab = "", ylab = "Number of species per station")
 ```
 
@@ -660,28 +667,6 @@ Key findings:
 
 ::: {.panel-tabset}
 
-###### Diver
-
-```{r}
-#| label: fig-emmeans-by-diver
-#| fig-cap: "Estimated marginal means of species richness by diver, adjusted for differences in sampling effort, depth strata, and region (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
-#| fig-width: 9
-
-spp_model_emm_diver |> 
-  cld(adjust = "tukey", Letters = letters, alpha = 0.05) |> 
-  ggplot(aes(x = reorder(diver, emmean), y = emmean))+
-  geom_point()+
-  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2, color = "#F08A4B")+
-  geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
-  labs(title = "Estimated Species Richness by Diver",
-       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
-       x = NULL,
-       y = "Estimated richness (± 95% CI)") +
-  theme_minimal(base_size = 13) +
-  expand_limits(y = 0)+
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-```
-
 ###### Region 
 
 ```{r}
@@ -699,7 +684,27 @@ spp_model_emm_region |>
        subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
        x = NULL,
        y = "Estimated richness (± 95% CI)") +
-  theme_minimal(base_size = 13) +
+  expand_limits(y = 0)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+###### Diver
+
+```{r}
+#| label: fig-emmeans-by-diver
+#| fig-cap: "Estimated marginal means of species richness by diver, adjusted for differences in sampling effort, depth strata, and region (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
+#| fig-width: 9
+
+spp_model_emm_diver |> 
+  cld(adjust = "tukey", Letters = letters, alpha = 0.05) |> 
+  ggplot(aes(x = reorder(diver, emmean), y = emmean))+
+  geom_point()+
+  geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2, color = "#F08A4B")+
+  geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
+  labs(title = "Estimated Species Richness by Diver",
+       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
+       x = NULL,
+       y = "Estimated richness (± 95% CI)") +
   expand_limits(y = 0)+
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
@@ -830,6 +835,29 @@ Key findings:
 
 ::: {.panel-tabset}
 
+###### Region
+
+```{r}
+#| label: fig-emmeans-abundance-region
+#| fig-cap: "Estimated marginal means of average numerical abundance by region, adjusted for differences in sampling effort, depth strata, and diver (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
+#| fig-width: 9
+
+abun_model_emmeans <- emmeans(abund_model, pairwise ~ region, type = "response")
+
+abun_model_emmeans$emmeans |>
+  cld(adjust = "tukey", Letters = letters, alpha = 0.05, type = "response") |> 
+  ggplot(aes(x = reorder(region, response), y = response))+
+  geom_point()+
+  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, color = "#065A82")+
+  geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
+  labs(title = "Estimated Numerical Abundance by Region",
+       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
+       x = NULL,
+       y = "Estimated Numerical Abundance (± 95% CI)") +
+  expand_limits(y = 0)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
 ###### Diver
 
 ```{r}
@@ -850,45 +878,19 @@ abun_model_emmeans$emmeans |>
        subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
        x = NULL,
        y = "Estimated Numerical Abundance (± 95% CI)") +
-  theme_minimal(base_size = 13) +
   expand_limits(y = 0)+
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
-
-###### Region
-
-```{r}
-#| label: fig-emmeans-abundance-region
-#| fig-cap: "Estimated marginal means of average numerical abundance by region, adjusted for differences in sampling effort, depth strata, and diver (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
-#| fig-width: 9
-abun_model_emmeans_diver <- emmeans(abund_model, pairwise ~ diver, type = "response")
-
-abun_model_emmeans <- emmeans(abund_model, pairwise ~ region, type = "response")
-
-abun_model_emmeans$emmeans |>
-  cld(adjust = "tukey", Letters = letters, alpha = 0.05, type = "response") |> 
-  ggplot(aes(x = reorder(region, response), y = response))+
-  geom_point()+
-  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, color = "#F08A4B")+
-  geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
-  labs(title = "Estimated Numerical Abundance by Region",
-       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
-       x = NULL,
-       y = "Estimated Numerical Abundance (± 95% CI)") +
-  theme_minimal(base_size = 13) +
-  expand_limits(y = 0)+
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-```
-
 
 :::
+
 # Biomass
 
 ```{r}
 biomass_by_station <- biomass_by_station_and_taxa |>
   filter(!str_detect(common_family, "blennie|gobie")) |> 
   left_join(stations) |> 
-  group_by(ps_site_id, ps_station_id, diver, region, subregion, n_transects, depth_strata) |>
+  group_by(ps_site_id, ps_station_id, diver, region, subregion, n_transects, depth_strata, habitat) |>
   summarise(avg_biomass_m2 = sum(avg_biomass_m2), .groups = "drop") |> 
   filter(!str_detect(diver, "/")) 
 ```
@@ -914,7 +916,9 @@ ggstatsplot::ggbetweenstats(data = biomass_by_station,
                             p.adjust.method = "holm",
                             type = "nonparametric",
                             title = "Fish biomass by depth strata", 
-                            xlab = "", ylab = "Fish biomass (g/m2) per station")
+                            caption = "Outliers not shown (stations with biomass > 1,000)",
+                            ggplot.component = ggplot2::scale_y_continuous(limits = (c(0, 1000))),
+                            xlab = "", ylab = "Fish biomass (g/m2) per station", )
 ```
 
 ###### Diver
@@ -932,6 +936,8 @@ ggstatsplot::ggbetweenstats(data = biomass_by_station,
                             p.adjust.method = "holm",
                             type = "nonparametric",
                             title = "Fish biomass by diver", 
+                            caption = "Outliers not shown (stations with biomass > 1,000)",
+                            ggplot.component = ggplot2::scale_y_continuous(limits = (c(0, 1000))),
                             xlab = "", ylab = "Fish biomass (h/m2) per station")
 ```
 
@@ -950,6 +956,8 @@ ggstatsplot::ggbetweenstats(data = biomass_by_station,
                             p.adjust.method = "holm",
                             type = "nonparametric",
                             title = "Fish biomass by region", 
+                            caption = "Outliers not shown (stations with biomass > 1,000)",
+                            ggplot.component = ggplot2::scale_y_continuous(limits = (c(0, 1000))),
                             xlab = "", ylab = "Fish biomass (g/m2) per station")
 ```
 
@@ -962,7 +970,7 @@ We modeled fish biomass (g/m²) at the station level using a generalized linear 
 #| tbl-cap: "Model estimates for fish biomass"
 #| 
 
-biomass_model <- glmmTMB(avg_biomass_m2 ~ n_transects + depth_strata + diver + region + (1 | ps_site_id),
+biomass_model <- glmmTMB(avg_biomass_m2 ~ n_transects + depth_strata + diver + habitat+ region + (1 | ps_site_id),
                          family = Gamma(link = "log"),
                          data = biomass_by_station)
 
@@ -992,7 +1000,7 @@ model_parameters(biomass_model, effects = "fixed") |>
 
 #### Key findings
 
-The biomass model revealed strong observer effects (χ² = 25.5, p < 0.001), a significant influence of depth strata (χ² = 8.2, p = 0.016), and marginal regional variation in fish biomass (χ² = 7.5, p = 0.059). Sampling effort (number of transects) had no detectable effect (χ² = 0.93, p = 0.34), indicating that the per-area biomass standardization (g/m²) appropriately controls for effort-related variation.
+The biomass model revealed strong observer effects (χ² = 25.5, p < 0.001), a significant influence of depth strata (χ² = 8.2, p = 0.016), and marginal regional variation in fish biomass (χ² = 7.5, p = 0.059). Sampling effort (number of transects) had no detectable effect (χ² = 0.93, p = 0.34), indicating that the per-area biomass standardization (g/m²) appropriately controls for effort-related variation. Habitat and exposure didn't have any effect either.
 
 Key findings:
 
@@ -1005,6 +1013,29 @@ Key findings:
     - Estimated marginal means indicate highest biomass in Lovongai (178 g/m²), followed by the Western Islands (152 g/m²), Manus (129 g/m²), and Murat (87 g/m²). Only Murat was significantly different from Lovongai (@fig-emmeans-biomass-region) 
 
 ::: {.panel-tabset}
+
+###### Region 
+
+```{r}
+#| label: fig-emmeans-biomass-region
+#| fig-cap: "Estimated marginal means of average biomass by region, adjusted for differences in sampling effort, depth strata, and diver (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
+#| fig-width: 9
+
+biomass_model_emmeans <- emmeans(biomass_model, pairwise ~ region, type = "response")
+
+biomass_model_emmeans$emmeans |>
+  cld(adjust = "tukey", Letters = letters, alpha = 0.05, type = "response") |> 
+  ggplot(aes(x = reorder(region, response), y = response))+
+  geom_point()+
+  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, color = "#065A82")+
+  geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
+  labs(title = "Estimated Biomass by Region",
+       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
+       x = NULL,
+       y = "Estimated Biomass (± 95% CI)") +
+  expand_limits(y = 0)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
 
 ###### Diver
 
@@ -1025,66 +1056,259 @@ biomass_model_emmeans_diver$emmeans |>
        subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
        x = NULL,
        y = "Estimated Biomass (± 95% CI)") +
-  theme_minimal(base_size = 13) +
-  expand_limits(y = 0)+
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-```
-
-###### Region 
-
-```{r}
-#| label: fig-emmeans-biomass-region
-#| fig-cap: "Estimated marginal means of average biomass by region, adjusted for differences in sampling effort, depth strata, and diver (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
-#| fig-width: 9
-
-biomass_model_emmeans <- emmeans(biomass_model, pairwise ~ region, type = "response")
-
-biomass_model_emmeans$emmeans |>
-  cld(adjust = "tukey", Letters = letters, alpha = 0.05, type = "response") |> 
-  ggplot(aes(x = reorder(region, response), y = response))+
-  geom_point()+
-  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, color = "#F08A4B")+
-  geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
-  labs(title = "Estimated Biomass by Region",
-       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
-       x = NULL,
-       y = "Estimated Biomass (± 95% CI)") +
-  theme_minimal(base_size = 13) +
   expand_limits(y = 0)+
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
 :::
 
+## By Family 
+
+```{r biomass_by_fam, include = T, eval = T}
+#| label: fig-biomass-treemap
+#| fig-cap: "Biomass by family"
+
+library(paletteer)
+
+create_family_pal <- function(col, n){
+  col <- unique(col)
+  
+  foo <- scales::colour_ramp(c(adjust_luminance(color = col, steps = +2),
+                      adjust_luminance(color = col, steps = -.5)))
+  
+  foo(seq(0, 1, length = n))
+}
+
+taxa_colors <- taxa_summary |> 
+  distinct(family, accepted_name, avg_biomass_m2) |> 
+  mutate(color_fam = highcharter::colorize(family, 
+                              paletteer_d("ggsci::default_igv", direction = -1, n = 43))) |> 
+  arrange(desc(family)) |> 
+  group_by(family) |> 
+  arrange(desc(avg_biomass_m2)) |> 
+  mutate(n_taxa = n_distinct(accepted_name),
+         color_sp = highcharter::colorize(accepted_name,
+                             colors = create_family_pal(col = color_fam, n = n_taxa))) |> 
+  ungroup()
+
+hc_data <- taxa_summary |> 
+  left_join(taxa_colors |> 
+              select(accepted_name, color_fam, color_sp)) |> 
+  filter(!is.na(color_sp)) |> 
+  mutate_if(is.numeric, round, 1) |> 
+  arrange(desc(family)) |> 
+  group_by(family) |> 
+  arrange(desc(avg_biomass_m2)) 
+
+
+data_to_hierarchical(hc_data,
+                     c(family, accepted_name), 
+                     avg_biomass_m2, colors = unique(hc_data$color_fam)) |> 
+  hchart(
+    type = "treemap",
+    allowDrillToNode = TRUE,
+    levels = lvl_opts,
+    tooltip = list(valueDecimals = 1)) |> 
+  hc_chart(style = list(fontFamily = "Times New Roman")) |> 
+  hc_title(text = "Fish biomass by family",
+           style = list(fontFamily = "Times New Roman")) |> 
+  hc_size(height = 500) |> 
+  highcharter::hc_tooltip(crosshairs = T) 
+```
+
+```{r}
+#| label: fig-biomass-by-family-by-subregion
+#| fig-cap: "Biomass by family and subregion"
+#| fig-width: 10
+#| fig-height: 9
+#| 
+library(plotly)
+
+# 1. Get top 20 families by total biomass
+top_fams <- biomass_by_station_and_family |> 
+  group_by(family) |> 
+  summarize(total_biomass = sum(avg_biomass_m2, na.rm = TRUE), .groups = "drop") |> 
+  slice_max(total_biomass, n = 20) |> 
+  pull(family)
+
+# 2. Prepare data and group others into "Other"
+plot_data <- biomass_by_station_and_family |>
+  left_join(stations |> distinct(ps_station_id, region, subregion), by = "ps_station_id") |>
+  mutate(family = if_else(family %in% top_fams, family, "Other")) |> 
+  group_by(region, subregion, family) |>
+  summarize(avg_biomass_m2 = round(mean(avg_biomass_m2), 1), .groups = "drop") |>
+  mutate(subregion = fct_reorder(subregion, avg_biomass_m2, .fun = sum, .desc = TRUE))
+
+# 3. Build family color scale (ensure 'Other' is included)
+fam_colors <- taxa_colors |> 
+  filter(family %in% top_fams) |> 
+  distinct(family, color_fam) |> 
+  add_row(family = "Other", color_fam = "#CCCCCC") |> 
+  deframe()
+
+# 4. Plot
+p <- ggplot(plot_data, aes(x = subregion, y = avg_biomass_m2, fill = family)) +
+  geom_col() +
+  labs(x = "", y = "Average biomass (g/m²)", fill = "",
+       title = "Fish Biomass by Family and Subregion",
+       subtitle = "Stacked bar plot showing mean biomass contributions by family (top 20 only)") +
+  scale_fill_manual(values = fam_colors) +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom",
+        legend.box = "horizontal") +
+  guides(fill = guide_legend(nrow = 2, byrow = TRUE))+
+  facet_wrap(~region, ncol = 4, scales = "free_x")
+
+ggplotly(p, tooltip = c("x", "y", "fill")) |> 
+  layout(legend = list(
+    orientation = "h",
+    xanchor = "center",
+    x = 0.5,
+    y = -0.25,
+    title = list(text = "")))
+```
+
+## By Species
+
+```{r species_scatter, include = T, eval = T}
+#| label: fig-biomass-scatter
+#| fig-cap: "Frequency, abundance, and biomass by species"
+
+tmp_plot <- taxa_summary |> 
+  mutate(ind_100m2 = 100*avg_count_m2) |> 
+  mutate_if(is.numeric, round, 3) |> 
+  mutate(tooltip = c(paste0("Taxa = ", accepted_name,
+                            "\n Family = ", family,
+                            "\n Frequency (% stations) = ", freq_obs,
+                            "\n Abundance (ind/100m2) = ", ind_100m2,
+                            "\n Biomass (g/m2) = ", avg_biomass_m2))) |> 
+  ggplot()+
+  ggiraph::geom_point_interactive(aes(x = freq_obs, 
+                                      y = ind_100m2, 
+                                      size = avg_biomass_m2, 
+                                      col = trophic_group, 
+                                      tooltip = tooltip))+
+  scale_color_manual(values = trophic_palette, na.value = "lightgrey")+
+  scale_y_log10()+
+  labs(y = "Abundance (Ind x 100m2)", 
+       x = "Frequency (% station-strata)", 
+       col = "Trophic group", 
+       size = "Biomass")+
+  ggthemes::theme_hc()+
+  theme(legend.title.position = "top", legend.position = "right")
+
+ggiraph::girafe(ggobj = tmp_plot)
+```
+
+
 # Trophic Composition
 
+```{r}
+#| label: fig-map-trophic-pies
+#| fig-cap: "Interactive map of trophic composition by site"
+#| echo: false
+#| warning: false
+#| message: false
+
+library(leaflet)
+library(leaflet.minicharts)
+library(scales)
+library(dplyr)
+library(tidyr)
+
+# Define trophic palette
+trophic_palette <- c("Herbivore/Detritivore"  = "#5C9E5C",
+                     "Planktivore"            = "#4C9CB2",
+                     "Lower-carnivore"        = "#E1B07E",
+                     "Top-predator"           = "#C75D4D",
+                     "Shark"                  = "#7E6FAB",
+                     "Unknown"                = "#D0D0D0")
+
+# Step 1: Summarize station-level biomass by trophic group
+
+biomass_by_station_and_trophic <- biomass_by_station_and_taxa |> 
+  group_by(ps_station_id, depth_strata, trophic_group) |> 
+  summarize(total_biomass_m2 = sum(avg_biomass_m2, na.rm = TRUE),
+            total_count_m2   = sum(avg_count_m2, na.rm = TRUE),
+            .groups = "drop") |> 
+  group_by(ps_station_id, depth_strata) |> 
+  mutate(frac_biomass = total_biomass_m2 / sum(total_biomass_m2),
+         frac_count   = total_count_m2 / sum(total_count_m2)) |> 
+  ungroup() |> 
+  left_join(stations |> distinct(ps_station_id, region, subregion),
+            by = "ps_station_id")
+
+# Step 2: Summarize to site-level biomass by trophic group
+biomass_by_site_and_trophic <- biomass_by_station_and_trophic |> 
+  left_join(stations |> select(ps_station_id, ps_site_id, region, subregion),
+            by = "ps_station_id") |>
+  mutate(trophic_group = replace_na(trophic_group, "Unknown")) |>
+  group_by(ps_site_id, trophic_group) |>
+  summarize(avg_biomass_m2 = round(mean(total_biomass_m2, na.rm = TRUE), 4),
+            .groups = "drop")
+
+# Step 3: Create trophic proportion matrix
+trophic_props <- biomass_by_site_and_trophic |>
+  group_by(ps_site_id) |>
+  mutate(frac_biomass = avg_biomass_m2 / sum(avg_biomass_m2)) |>
+  ungroup() |>
+  select(ps_site_id, trophic_group, frac_biomass) |>
+  pivot_wider(names_from = trophic_group, values_from = frac_biomass, values_fill = 0) |> 
+  select(ps_site_id, all_of(names(trophic_palette)))
+
+# Step 4: Add site metadata
+site_locations <- uvs_sites |> 
+  distinct(ps_site_id, region, subregion, latitude, longitude)
+
+# Merge and scale pie sizes by biomass
+trophic_map_data <- trophic_props |>
+  left_join(site_locations, by = "ps_site_id") |> 
+  drop_na(latitude, longitude)
+
+# Step 5: Total biomass for size scaling
+total_biomass_by_site <- biomass_by_site_and_trophic |>
+  group_by(ps_site_id) |>
+  summarize(total_biomass = sum(avg_biomass_m2), .groups = "drop")
+
+trophic_map_data <- trophic_map_data |>
+  left_join(total_biomass_by_site, by = "ps_site_id") |>
+  mutate(pie_size = rescale(log1p(total_biomass), to = c(5, 30)))  # log scale to dampen skew
+
+# Step 6: Extract numeric matrix of trophic group proportions
+trophic_matrix <- trophic_map_data |> 
+  select(all_of(names(trophic_palette))) |> 
+  as.matrix()
+
+# Sanity check
+stopifnot(identical(colnames(trophic_matrix), names(trophic_palette)))
+
+# Step 7: Render interactive pie chart map
+leaflet(data = trophic_map_data) |>
+  addProviderTiles(providers$Esri.WorldImagery) |>
+  addMinicharts(lng = trophic_map_data$longitude,
+                lat = trophic_map_data$latitude,
+                chartdata = trophic_matrix,
+                type = "pie",
+                colorPalette = unname(trophic_palette),  # Use unname to avoid name mismatch bug
+                width = trophic_map_data$pie_size,
+                height = trophic_map_data$pie_size,
+                showLabels = FALSE) |> 
+  addFullscreenControl(position = "topright") 
+```
+
 This section explores the distribution of fish biomass and abundance across major trophic groups, offering insight into the functional structure of reef fish assemblages and potential indicators of ecosystem health.
+
+::: {.panel-tabset}
+
+## Abundance
 
 ```{r}
 library(plotly)
 #| label: fig-troph-by-region
 #| fig-cap: "Trophic composition by region"
-#| fig-width: 9
-
-trophic_palette <- c("Herbivore/Detritivore" = "#5C9E5C",   # Earthy green (natural, calming)
-                     "Planktivore"            = "#4C9CB2",   # Soft teal-blue (planktivores)
-                     "Lower-carnivore"        = "#E1B07E",   # Sandy ochre (mid-level predator)
-                     "Top-predator"           = "#C75D4D",   # Muted brick red (assertive but not harsh)
-                     "Shark"                  = "#7E6FAB",   # Deep slate violet (distinctive, dignified)
-                     "NA"                     = "#D0D0D0")    # Light neutral gray (non-disruptive)
-
-biomass_by_station_and_trophic <- biomass_by_station_and_taxa |> 
-  group_by(ps_station_id, depth_strata, trophic_group) |> 
-  summarize(total_biomass_m2 = sum(avg_biomass_m2),
-            total_count_m2   = sum(avg_count_m2),
-            .groups = "drop") |> 
-  group_by(ps_station_id, depth_strata) |> 
-  mutate(frac_biomass = total_biomass_m2/sum(total_biomass_m2),
-         frac_count = total_count_m2/sum(total_count_m2)) |> 
-  left_join(stations |> 
-              distinct(ps_station_id, region, subregion), 
-            by = "ps_station_id") |> 
-  ungroup()
+#| fig-width: 10
+#| fig-height: 8
 
 biomass_by_region_and_trophic <- biomass_by_station_and_trophic |> 
   group_by(region, subregion, trophic_group) |>
@@ -1094,12 +1318,10 @@ biomass_by_region_and_trophic <- biomass_by_station_and_trophic |>
 
 p <- biomass_by_region_and_trophic |> 
   ggplot(aes(fct_reorder(subregion, avg_count_m2, sum, .desc = T), avg_count_m2, fill = trophic_group))+
-  geom_col(aes(text = paste0(
-    "Region: ", region, "<br>",
-    "Subregion: ", subregion, "<br>",
-    "Trophic group: ", trophic_group, "<br>",
-    "Avg. Abundance: ", round(avg_biomass_m2, 2), " ind/m²"
-  )))+
+  geom_col(aes(text = paste0("Region: ", region, "<br>",
+                             "Subregion: ", subregion, "<br>",
+                             "Trophic group: ", trophic_group, "<br>",
+                             "Avg. Abundance: ", round(avg_count_m2, 2), " ind/m²")))+
   facet_wrap(~region, ncol = 4, scales = "free_x") +
   labs(x = "", y = "Average Abundance (in/m²)", fill = "",
        title = "Average fish Abundance by trophic group and region",
@@ -1118,6 +1340,8 @@ ggplotly(p, tooltip = "text") |>
       y = -0.2,
       title = list(text = "")))
 ```
+
+## Biomass 
 
 ```{r}
 #| label: fig-troph-by-subregion
@@ -1144,13 +1368,12 @@ p <- ggplot(plot_data,
   ))) +
   facet_wrap(~region, ncol = 4, scales = "free_x") +
   labs(x = "", y = "Average biomass (g/m²)", fill = "",
-    title = "Average fish biomass by trophic group and region",
-    subtitle = "Stacked bar plots show the contribution of each trophic group to total biomass") +
+       title = "Average fish biomass by trophic group and region",
+       subtitle = "Stacked bar plots show the contribution of each trophic group to total biomass") +
   scale_fill_manual(values = trophic_palette) +
-  theme_minimal(base_size = 13) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
-    legend.position = "bottom",
-    legend.box = "horizontal") +
+        legend.position = "bottom",
+        legend.box = "horizontal") +
   guides(fill = guide_legend(nrow = 1, byrow = TRUE))
 
 # Convert to plotly with tooltips
@@ -1162,14 +1385,13 @@ ggplotly(p, tooltip = "text") |>
       title = list(text = "")))
 ```
 
-To test whether the relative biomass of trophic groups differed significantly among regions, we used Kruskal-Wallis tests for each group. Only planktivores showed a moderate regional effect (χ² = 9.16, p = 0.027). Post hoc comparisons indicated that the proportional biomass of planktivores was higher in Lovongai than in other regions, but these differences did not remain significant after correcting for multiple comparisons (padj = 0.051 for Lovongai vs Western Islands). We found no evidence for regional differences in the proportion of biomass contributed by top predators or sharks, two key indicators of reef health.
+:::
+
+To test whether the relative biomass of trophic groups differed significantly among regions, we used Kruskal-Wallis tests for each group. Only planktivores showed a moderate regional effect (χ² = 9.16, p = 0.027). Post hoc comparisons indicated that the proportional biomass of planktivores was higher in Lovongai than in other regions, but these differences did not remain significant after correcting for multiple comparisons (padj = 0.051 for Lovongai vs Western Islands). 
+
+Across all regions, top predators contributed only a small fraction of total fish biomass. Median values ranged from 2–3%, with mean contributions below 10% in all regions (@fig-troph-prop-by-region). Sharks were virtually absent from surveys and represented < 1% of the biomass. The low predator biomass is a potential warning sign of trophic downgrading and ecosystem stress
 
 ```{r}
-#| label: fig-troph-prop-by-region
-#| fig-cap: "Proportion of Biomass by Trophic Group and Region"
-#| fig-width: 9
-#| 
-
 kruskal_results <- biomass_by_station_and_trophic |>
   filter(!is.na(trophic_group)) |> 
   group_by(trophic_group) |> 
@@ -1182,7 +1404,7 @@ dunn_results <- biomass_by_station_and_trophic |>
   mutate(region = as.factor(region)) |> 
   rstatix::dunn_test(frac_biomass ~ region, p.adjust.method = "bonferroni")
 
-biomass_by_station_and_trophic |> 
+pop_biomass_by_trophic_plot <- biomass_by_station_and_trophic |> 
   filter(!is.na(trophic_group)) |> 
   ggplot() +
   geom_boxplot(aes(x = region, y = frac_biomass, fill = trophic_group),
@@ -1208,45 +1430,55 @@ biomass_by_station_and_trophic |>
   guides(fill = guide_legend(nrow = 1, byrow = TRUE))
 ```
 
-
 ```{r}
+#| label: fig-troph-prop-by-region
+#| fig-cap: "Proportion of Biomass by Trophic Group and Region"
+#| fig-width: 10
+#| fig-height: 8
+#| 
 library(plotly)
+library(dplyr)
 
-fig <- plot_ly(
-  data = biomass_by_station_and_trophic |> filter(!is.na(trophic_group)),
-  x = ~region,
-  y = ~frac_biomass,
-  color = ~trophic_group,
-  colors = trophic_palette,
-  type = "box",
-  boxpoints = "all",       # show individual points
-  jitter = 0.3,
-  pointpos = -1.8,
-  marker = list(size = 4, opacity = 0.6),
-  line = list(width = 1),
-  hoverinfo = "text",
-  text = ~paste0(
-    "Region: ", region, "<br>",
-    "Trophic group: ", trophic_group, "<br>",
-    "Station: ", ps_station_id, "<br>",
-    "Biomass fraction: ", round(frac_biomass, 3))
-)
+# 1. Compute summary stats per group
+summary_data <- biomass_by_station_and_trophic %>%
+  filter(!is.na(trophic_group)) %>%
+  group_by(region, trophic_group) %>%
+  summarise(median = round(median(frac_biomass), 2),
+            iqr    = round(IQR(frac_biomass), 2),
+            mean   = round(mean(frac_biomass), 2),
+          .groups = "drop") %>%
+  mutate(hover_text = paste0("Region: ", region, "<br>",
+                             "Trophic group: ", trophic_group, "<br>",
+                             "Mean: ", mean, "<br>",
+                             "Median: ", median, "<br>",
+                             "IQR: ", iqr))
 
-fig <- fig %>% layout(
-  title = list(
-    text = "Proportion of Biomass by Trophic Group and Region",
-    font = list(size = 18)
-  ),
-  yaxis = list(title = "Proportion of Total Biomass"),
-  xaxis = list(title = "", tickangle = 45),
-  boxmode = "group",
-  legend = list(
-    orientation = "h",
-    x = 0.5, xanchor = "center",
-    y = -0.2,
-    font = list(size = 12)
-  )
-)
+# 2. Join the hover text back to the main data
+plot_data <- biomass_by_station_and_trophic %>%
+  filter(!is.na(trophic_group)) %>%
+  left_join(summary_data, by = c("region", "trophic_group"))
+
+# 3. Interactive boxplot
+fig <- plot_ly(data = plot_data,
+               x = ~region,
+               y = ~frac_biomass,
+               color = ~trophic_group,
+               text = ~hover_text,
+               type = "box",
+               hoverinfo = "text",
+               colors = trophic_palette,
+               boxpoints = "all",
+               jitter = 0.3,
+               pointpos = -1.8,
+               marker = list(size = 4, opacity = 0.5))
+
+# 4. Layout
+fig <- fig %>%
+  layout(boxmode = "group",
+         title = list(text = "Proportion of Biomass by Trophic Group and Region"),
+         yaxis = list(title = "Proportion of Total Biomass"),
+         legend = list(orientation = "h", x = 0.5, xanchor = "center", y = -0.25),
+         margin = list(b = 80))
 
 fig
 ```
@@ -1275,7 +1507,9 @@ Finally, we used non-metric multidimensional scaling (NMDS) to visualize pattern
 
 ```{r message = F, warning = F}
 # 1. NMDS
-nmds_result <- metaMDS(trophic_matrix, distance = "bray", k = 2, trymax = 100)
+nmds_result <- suppressMessages(
+  metaMDS(trophic_matrix, distance = "bray", k = 2, trymax = 100, trace = 0)
+)
 
 # 2. Fit trophic group vectors to ordination
 fit <- envfit(nmds_result, trophic_matrix, permutations = 999)
@@ -1293,7 +1527,19 @@ vecs_sig <- vecs |> filter(pval < 0.05)
 # 4. Site coordinates + metadata
 nmds_coords <- as.data.frame(scores(nmds_result, display = "sites")) |>
   bind_cols(trophic_meta)
+```
 
+
+::: {.panel-tabset}
+
+### Depth strata
+
+```{r}
+#| label: fig-ndms-trophic-depth
+#| fig-cap: "NMDS of Trophic Composition by Depth "
+#| fig-width: 10
+#| fig-height: 7
+#|
 # 5. NMDS Plot
 ggplot(nmds_coords, aes(x = NMDS1, y = NMDS2, color = depth_strata)) +
   geom_point(size = 3, alpha = 0.8) +
@@ -1301,26 +1547,231 @@ ggplot(nmds_coords, aes(x = NMDS1, y = NMDS2, color = depth_strata)) +
   geom_segment(data = vecs,
                aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2),
                arrow = arrow(length = unit(0.25, "cm")), color = "black") +
-  geom_text(
-  data = vecs_sig,
-  aes(x = NMDS1 * 1.1,
-      y = NMDS2 * 1.1,
-      label = paste0(variable, "\nR² = ", round(r2, 2))),
-  inherit.aes = FALSE,
-  size = 5
-)+
-  labs(
-    title = "NMDS of Trophic Composition with Vector Fit",
-    subtitle = paste("Bray-Curtis dissimilarity | Stress =", round(nmds_result$stress, 3)),
-    caption = "Arrows indicate significant (p < 0.05) trophic group vectors; length reflects strength of correlation (R²).",
-    x = "NMDS1",
-    y = "NMDS2",
-    color = ""
-  ) +
-  theme_minimal(base_size = 14) +
+  geom_text(data = vecs_sig,
+            aes(x = NMDS1 * 1.1,
+                y = NMDS2 * 1.1,
+                label = paste0(variable, "\nR² = ", round(r2, 2))),
+            inherit.aes = FALSE,
+            size = 5)+
+  labs(title = "NMDS of Trophic Composition with Vector Fit",
+       subtitle = paste("Bray-Curtis dissimilarity | Stress =", round(nmds_result$stress, 3)),
+       caption = "Arrows indicate significant (p < 0.05) trophic group vectors; length reflects strength of correlation (R²).",
+       x = "NMDS1",
+       y = "NMDS2",
+       color = "") +
   theme(legend.position = "bottom")
 ```
 
+### Region
+
+```{r}
+#| label: fig-ndms-trophic-region
+#| fig-cap: "NMDS of Trophic Composition by Region"
+#| fig-width: 10
+#| fig-height: 7
+#|
+
+# 5. NMDS Plot
+ggplot(nmds_coords, aes(x = NMDS1, y = NMDS2, color = region)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(type = "t", level = 0.68, linetype = "dashed", linewidth = 0.6) +
+  geom_segment(data = vecs,
+               aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2),
+               arrow = arrow(length = unit(0.25, "cm")), color = "black") +
+  geom_text(data = vecs_sig,
+            aes(x = NMDS1 * 1.1,
+                y = NMDS2 * 1.1,
+                label = paste0(variable, "\nR² = ", round(r2, 2))),
+            inherit.aes = FALSE,
+            size = 5)+
+  labs(title = "NMDS of Trophic Composition with Vector Fit",
+       subtitle = paste("Bray-Curtis dissimilarity | Stress =", round(nmds_result$stress, 3)),
+       caption = "Arrows indicate significant (p < 0.05) trophic group vectors; length reflects strength of correlation (R²).",
+       x = "NMDS1",
+       y = "NMDS2",
+       color = "") +
+  theme(legend.position = "bottom")
+```
+
+:::
+
 # Community Structure
 
+A permutational multivariate analysis of variance (PERMANOVA) revealed significant effects of both depth strata and region on species-level fish community structure (Bray-Curtis dissimilarity). Together, they explained approximately 8.2% of the variation in community composition: Depth strata accounted for 3.0% of the variation (F = 2.65, p = 0.001) and	Region explained an additional 5.1% (F = 2.99, p = 0.001),
 
+```{r}
+spp_matrix <- biomass_by_station_and_taxa |>
+  select(ps_station_id, accepted_name, avg_biomass_m2) |>
+  pivot_wider(names_from = accepted_name, values_from = avg_biomass_m2, values_fill = 0) |>
+  column_to_rownames("ps_station_id")
+
+spp_meta <- biomass_by_station_and_taxa |>
+  left_join(stations |> 
+              distinct(ps_station_id, region), 
+            by = "ps_station_id") |>
+  distinct(ps_station_id, region, depth_strata) |>
+  filter(ps_station_id %in% rownames(spp_matrix)) |> 
+  arrange(match(ps_station_id, rownames(spp_matrix)))
+
+adonis_spp <- adonis2(spp_matrix ~  depth_strata + region, 
+                          by = "margin",
+                          data = spp_meta, 
+                          permutations = 999, 
+                          method = "bray")
+```
+
+```{r}
+#| label: fig-spp-nmds
+#| fig-cap: "NMDS of Species Composition with Significant Species Vectors"
+#| fig-width: 10
+#| fig-height: 8
+#| 
+
+spp_matrix_filtered <- spp_matrix[, apply(spp_matrix, 2, sd) > 0]
+
+# 1. NMDS on species matrix
+spp_nmds <- metaMDS(spp_matrix_filtered, distance = "bray", k = 3, trymax = 100, trace = 0)
+
+# 2. Fit species vectors
+spp_fit <- envfit(spp_nmds, spp_matrix_filtered, permutations = 999)
+
+# 3. Extract significant vectors (p < 0.05)
+spp_vecs <- as.data.frame(scores(spp_fit, display = "vectors"))
+spp_vecs$species <- rownames(spp_vecs)
+spp_vecs$pval <- spp_fit$vectors$pvals[spp_vecs$species]
+spp_vecs$r2 <- spp_fit$vectors$r[spp_vecs$species]
+spp_vecs_sig <- spp_vecs |> filter(pval < 0.05, r2 >= 0.2)
+
+# 4. Extract site coordinates
+spp_coords <- as.data.frame(scores(spp_nmds, display = "sites")) |> 
+  bind_cols(spp_meta)
+
+# 5. Plot with significant species vectors
+ggplot(spp_coords, aes(x = NMDS1, y = NMDS2, color = region)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(type = "t", level = 0.68, linetype = "dashed") +
+  geom_segment(data = spp_vecs_sig,
+               aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2),
+               arrow = arrow(length = unit(0.25, "cm")), color = "black") +
+  geom_text(data = spp_vecs_sig,
+            aes(x = NMDS1 * 1.1, y = NMDS2 * 1.1, label = species),
+            inherit.aes = FALSE,
+            size = 4) +
+  labs(title = "NMDS of Species Composition with Significant Species Vectors",
+       subtitle = paste("Bray-Curtis dissimilarity | Stress =", round(spp_nmds$stress, 3)),
+       caption = "Arrows indicate species strongly associated with NMDS axes (p < 0.05).",
+       x = "NMDS1",
+       y = "NMDS2",
+       color = "Region") +
+  theme(legend.position = "bottom")
+```
+
+## Species contributions to dissimilarity
+
+To identify the species driving regional differences in community composition, we conducted a Similarity Percentages (SIMPER) analysis based on Bray-Curtis dissimilarity of biomass values. This method decomposes pairwise differences between regions into contributions by individual species, highlighting those most responsible for observed dissimilarities. For each pairwise comparison, we extracted the top ten contributing species and visualized their mean biomass in each region. These results offer an intuitive view of which taxa differentiate local assemblages and can help identify regionally distinctive or dominant species.
+
+```{r}
+# 1. Run SIMPER on all region pairs
+simper_result <- simper(spp_matrix, spp_meta$region, permutations = 999)
+
+# 2. Tidy the output into a long dataframe of top contributors
+simper_summary_all <- map_dfr(names(simper_result), 
+                              function(pair_name) {
+                                sim <- simper_result[[pair_name]]
+                                tibble(pair         = pair_name,
+                                       species      = sim$species,
+                                       avg_contrib  = sim$average,
+                                       sd_contrib   = sim$sd,
+                                       ratio        = sim$ratio,
+                                       mean_group_a = sim$ava,
+                                       mean_group_b = sim$avb,
+                                       cumsum       = sim$cusum,
+                                       p_value      = sim$p) |>
+                                  arrange(desc(avg_contrib)) |>
+                                  slice_head(n = 10) |>
+                                  mutate(across(where(is.numeric), round, 3))})
+
+# 3. Add region labels and melt for plotting
+simper_plot_data <- simper_summary_all |>
+  separate(pair, into = c("region_a", "region_b"), sep = "_") |>
+  pivot_longer(cols = c(mean_group_a, mean_group_b),
+               names_to = "region_code", values_to = "mean_biomass") |>
+  mutate(region = case_when(region_code == "mean_group_a" ~ region_a,
+                            region_code == "mean_group_b" ~ region_b))
+
+# 4. Function to plot all comparisons for a given region
+plot_simper_by_focal <- function(focal_region) {
+  
+  simper_plot_data |>
+    filter(region_a == focal_region | region_b == focal_region) |>
+    mutate(comparison = if_else(region_a == focal_region, region_b, region_a)) |>
+    ggplot(aes(x = fct_reorder(species, avg_contrib), 
+               y = mean_biomass, fill = region)) +
+    geom_col(position = "dodge") +
+    facet_wrap(~comparison, scales = "free_x") +
+    labs(title = glue("Top 10 Species Driving Differences with {focal_region}"),
+         subtitle = "SIMPER analysis (Bray-Curtis, biomass)",
+         x = "", y = "Mean biomass (g/m²)", fill = "") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          strip.text = element_text(face = "bold"),
+          legend.position = "bottom",
+      legend.box = "horizontal",
+      legend.text = element_text(size = 10))+
+    guides(fill = guide_legend(nrow = 1, byrow = TRUE))
+  
+}
+```
+
+::: {.panel-tabset}
+
+### Manus
+
+```{r}
+#| label: fig-simper-manus
+#| fig-cap: "Top 10 species driving differences with Manus"
+#| fig-width: 10
+#| fig-height: 7
+#|
+
+plot_simper_by_focal("Manus")
+```
+
+### Murat
+
+```{r}
+#| label: fig-simper-murat
+#| fig-cap: "Top 10 species driving differences with Murat"
+#| fig-width: 10
+#| fig-height: 7
+#|
+
+plot_simper_by_focal("Murat")
+```
+
+### Western Islands
+
+```{r}
+#| label: fig-simper-islands
+#| fig-cap: "Top 10 species driving differences with the Western Islands"
+#| fig-width: 10
+#| fig-height: 7
+#|
+
+plot_simper_by_focal("Western Islands")
+```
+
+### Lovongai
+
+```{r}
+#| label: fig-simper-lovongai
+#| fig-cap: "Top 10 species driving differences with Lovongai"
+#| fig-width: 10
+#| fig-height: 7
+#|
+
+plot_simper_by_focal("Lovongai")
+```
+
+:::
+
+# Summary Taxa tables
