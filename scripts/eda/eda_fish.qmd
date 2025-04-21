@@ -1775,3 +1775,401 @@ plot_simper_by_focal("Lovongai")
 :::
 
 # Summary Taxa tables
+
+```{r}
+# --- Taxon-level summary by region ------------------------------------
+
+taxa_summary_by_region <- biomass_by_station_and_taxa |> 
+  left_join(stations |> distinct(ps_station_id, region, subregion), by = "ps_station_id") |>
+  group_by(region, trophic_group, order, family, accepted_name) |> 
+  summarise(
+    total_count   = sum(total_count, na.rm = TRUE),
+    avg_length_wm = mean(avg_length_wm, na.rm = TRUE),
+    avg_count     = mean(avg_count, na.rm = TRUE),
+    freq_obs      = 100 * sum(avg_count_m2 > 0, na.rm = TRUE) / n(),
+    avg_biomass_m2 = mean(avg_biomass_m2, na.rm = TRUE),
+    avg_count_m2   = mean(avg_count_m2, na.rm = TRUE),
+    .groups = "drop"
+  ) |> 
+  left_join(
+    biomass_per_obs |> 
+      left_join(stations |> distinct(ps_station_id, region), by = "ps_station_id") |> 
+      group_by(region, accepted_name) |> 
+      summarise(
+        min_tl_cm = min(avg_length, na.rm = TRUE),
+        max_tl_cm = max(avg_length, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by = c("region", "accepted_name")
+  ) |> 
+  mutate(across(
+    c(freq_obs, avg_count, avg_biomass_m2, avg_count_m2, avg_length_wm),
+    ~ round(.x, 6)
+  ))
+
+
+# --- Family-level summary by region -----------------------------------
+
+family_summary_by_region <- biomass_by_station_and_family |> 
+  left_join(stations |> distinct(ps_station_id, region, subregion), by = "ps_station_id") |> 
+  group_by(region, order, family) |> 
+  summarise(
+    freq_obs       = 100 * n_distinct(ps_station_id[avg_count_m2 > 0]) / n_distinct(ps_station_id),
+    avg_count      = mean(avg_count, na.rm = TRUE),
+    avg_count_m2   = mean(avg_count_m2, na.rm = TRUE),
+    avg_biomass_m2 = mean(avg_biomass_m2, na.rm = TRUE),
+    .groups = "drop"
+  ) |> 
+  left_join(
+    biomass_by_station_and_taxa |> 
+      left_join(stations |> distinct(ps_station_id, region), by = "ps_station_id") |> 
+      group_by(region, order, family) |> 
+      summarise(
+        total_count = sum(total_count, na.rm = TRUE),
+        n_taxa      = n_distinct(accepted_name[avg_count_m2 > 0]),
+        .groups = "drop"
+      ),
+    by = c("region", "order", "family")
+  ) |> 
+  mutate(across(
+    c(avg_count, avg_count_m2, avg_biomass_m2, freq_obs),
+    ~ round(.x, 6)
+  )) |> 
+  select(region, order, family, n_taxa, total_count, everything())
+```
+
+## By Species
+
+::: {.panel-tabset}
+
+### Lovongai
+
+```{r}
+# Filter Lovongai data
+lovongai_tbl <- taxa_summary_by_region |> 
+  filter(region == "Lovongai", avg_biomass_m2 > 0) |>
+  arrange(desc(avg_biomass_m2)) |> 
+  mutate(`Accepted name`             = accepted_name,
+         `Family`                    = family,
+         `Total count`               = total_count,
+         `Avg. count`                = round(avg_count, 2),
+         `Freq. occurrence (%)`      = round(freq_obs, 2),
+         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
+         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3),
+         `Mean TL (cm)`              = avg_length_wm,
+         `Min TL (cm)`               = min_tl_cm,
+         `Max TL (cm)`               = max_tl_cm) |>
+  select(family, `Accepted name`, `Total count`, `Avg. count`,
+         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`,
+         `Mean TL (cm)`, `Min TL (cm)`, `Max TL (cm)`)
+
+# Render reactable
+reactable(lovongai_tbl,
+          filterable      = TRUE,
+          pagination      = TRUE,
+          defaultPageSize = 10,
+          striped         = TRUE,
+          highlight       = TRUE,
+          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
+          theme           = custom_tbl_theme,
+          columns         = list(
+            family = colDef(name = "Family", minWidth = 150),
+            `Accepted name` = colDef(name = "Accepted name",
+                                     cell = function(value) htmltools::tags$i(value),
+                                     minWidth = 180),
+            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
+            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
+            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
+  add_title("Fish species") |>
+  add_subtitle("Summary of fish species observed in Lovongai",
+               font_size  = 20,
+               font_color = "#666666",
+               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
+```
+
+### Murat
+
+```{r}
+# Filter Murat data
+murat_tbl <- taxa_summary_by_region |> 
+  filter(region == "Murat", avg_biomass_m2 > 0) |>
+  mutate(`Accepted name`             = accepted_name,
+         `Family`                    = family,
+         `Total count`               = total_count,
+         `Avg. count`                = round(avg_count, 2),
+         `Freq. occurrence (%)`      = round(freq_obs, 2),
+         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
+         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3),
+         `Mean TL (cm)`              = avg_length_wm,
+         `Min TL (cm)`               = min_tl_cm,
+         `Max TL (cm)`               = max_tl_cm) |>
+  select(family, `Accepted name`, `Total count`, `Avg. count`,
+         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`,
+         `Mean TL (cm)`, `Min TL (cm)`, `Max TL (cm)`)
+
+# Render reactable
+reactable(murat_tbl,
+          filterable      = TRUE,
+          pagination      = TRUE,
+          defaultPageSize = 10,
+          striped         = TRUE,
+          highlight       = TRUE,
+          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
+          theme           = custom_tbl_theme,
+          columns         = list(
+            family = colDef(name = "Family", minWidth = 150),
+            `Accepted name` = colDef(name = "Accepted name",
+                                     cell = function(value) htmltools::tags$i(value),
+                                     minWidth = 180),
+            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
+            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
+            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
+  add_title("Fish species") |>
+  add_subtitle("Summary of fish species observed in Murat",
+               font_size  = 20,
+               font_color = "#666666",
+               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
+```
+
+### Manus
+
+```{r}
+# Filter Manus data
+manus_tbl <- taxa_summary_by_region |> 
+  filter(region == "Manus", avg_biomass_m2 > 0) |>
+  mutate(`Accepted name`             = accepted_name,
+         `Family`                    = family,
+         `Total count`               = total_count,
+         `Avg. count`                = round(avg_count, 2),
+         `Freq. occurrence (%)`      = round(freq_obs, 2),
+         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
+         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3),
+         `Mean TL (cm)`              = avg_length_wm,
+         `Min TL (cm)`               = min_tl_cm,
+         `Max TL (cm)`               = max_tl_cm) |>
+  select(family, `Accepted name`, `Total count`, `Avg. count`,
+         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`,
+         `Mean TL (cm)`, `Min TL (cm)`, `Max TL (cm)`)
+
+# Render reactable
+reactable(manus_tbl,
+          filterable      = TRUE,
+          pagination      = TRUE,
+          defaultPageSize = 10,
+          striped         = TRUE,
+          highlight       = TRUE,
+          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
+          theme           = custom_tbl_theme,
+          columns         = list(
+            family = colDef(name = "Family", minWidth = 150),
+            `Accepted name` = colDef(name = "Accepted name",
+                                     cell = function(value) htmltools::tags$i(value),
+                                     minWidth = 180),
+            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
+            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
+            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
+  add_title("Fish species") |>
+  add_subtitle("Summary of fish species observed in Manus",
+               font_size  = 20,
+               font_color = "#666666",
+               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
+```
+
+### Western Islands
+
+```{r}
+# Filter Murat data
+islands_tbl <- taxa_summary_by_region |> 
+  filter(region == "Western Islands", avg_biomass_m2 > 0) |>
+  mutate(`Accepted name`             = accepted_name,
+         `Family`                    = family,
+         `Total count`               = total_count,
+         `Avg. count`                = round(avg_count, 2),
+         `Freq. occurrence (%)`      = round(freq_obs, 2),
+         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
+         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3),
+         `Mean TL (cm)`              = avg_length_wm,
+         `Min TL (cm)`               = min_tl_cm,
+         `Max TL (cm)`               = max_tl_cm) |>
+  select(family, `Accepted name`, `Total count`, `Avg. count`,
+         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`,
+         `Mean TL (cm)`, `Min TL (cm)`, `Max TL (cm)`)
+
+# Render reactable
+reactable(islands_tbl,
+          filterable      = TRUE,
+          pagination      = TRUE,
+          defaultPageSize = 20,
+          striped         = TRUE,
+          highlight       = TRUE,
+          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
+          theme           = custom_tbl_theme,
+          columns         = list(
+            family = colDef(name = "Family", minWidth = 150),
+            `Accepted name` = colDef(name = "Accepted name",
+                                     cell = function(value) htmltools::tags$i(value),
+                                     minWidth = 180),
+            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
+            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
+            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
+  add_title("Fish species") |>
+  add_subtitle("Summary of fish species observed in the Western Islands",
+               font_size  = 20,
+               font_color = "#666666",
+               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
+```
+
+:::
+
+## By family
+
+::: {.panel-tabset}
+
+### Lovongai
+
+```{r}
+# Filter Lovongai data
+lovongai_tbl <- family_summary_by_region |> 
+  filter(region == "Lovongai", avg_biomass_m2 > 0) |>
+  arrange(desc(avg_biomass_m2)) |> 
+  mutate(`Family`                    = family,
+         `Total count`               = total_count,
+         `Avg. count`                = round(avg_count, 2),
+         `Freq. occurrence (%)`      = round(freq_obs, 2),
+         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
+         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3)) |>
+  select(family, `Total count`, `Avg. count`,
+         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`)
+
+# Render reactable
+reactable(lovongai_tbl,
+          filterable      = TRUE,
+          pagination      = TRUE,
+          defaultPageSize = 10,
+          striped         = TRUE,
+          highlight       = TRUE,
+          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
+          theme           = custom_tbl_theme,
+          columns         = list(
+            family = colDef(name = "Family", minWidth = 150),
+            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
+            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
+            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
+  add_title("Fish families") |>
+  add_subtitle("Summary of fish families observed in Lovongai",
+               font_size  = 20,
+               font_color = "#666666",
+               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
+```
+
+### Murat
+
+```{r}
+# Filter Lovongai data
+murat_tbl <- family_summary_by_region |> 
+  filter(region == "Murat", avg_biomass_m2 > 0) |>
+  arrange(desc(avg_biomass_m2)) |> 
+  mutate(`Family`                    = family,
+         `Total count`               = total_count,
+         `Avg. count`                = round(avg_count, 2),
+         `Freq. occurrence (%)`      = round(freq_obs, 2),
+         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
+         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3)) |>
+  select(family, `Total count`, `Avg. count`,
+         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`)
+
+# Render reactable
+reactable(murat_tbl,
+          filterable      = TRUE,
+          pagination      = TRUE,
+          defaultPageSize = 10,
+          striped         = TRUE,
+          highlight       = TRUE,
+          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
+          theme           = custom_tbl_theme,
+          columns         = list(
+            family = colDef(name = "Family", minWidth = 150),
+            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
+            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
+            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
+  add_title("Fish families") |>
+  add_subtitle("Summary of fish families observed in Murat",
+               font_size  = 20,
+               font_color = "#666666",
+               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
+```
+
+### Manus
+
+```{r}
+# Filter Lovongai data
+manus_tbl <- family_summary_by_region |> 
+  filter(region == "Manus", avg_biomass_m2 > 0) |>
+  arrange(desc(avg_biomass_m2)) |> 
+  mutate(`Family`                    = family,
+         `Total count`               = total_count,
+         `Avg. count`                = round(avg_count, 2),
+         `Freq. occurrence (%)`      = round(freq_obs, 2),
+         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
+         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3)) |>
+  select(family, `Total count`, `Avg. count`,
+         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`)
+
+# Render reactable
+reactable(manus_tbl,
+          filterable      = TRUE,
+          pagination      = TRUE,
+          defaultPageSize = 10,
+          striped         = TRUE,
+          highlight       = TRUE,
+          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
+          theme           = custom_tbl_theme,
+          columns         = list(
+            family = colDef(name = "Family", minWidth = 150),
+            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
+            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
+            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
+  add_title("Fish families") |>
+  add_subtitle("Summary of fish families observed in Manus",
+               font_size  = 20,
+               font_color = "#666666",
+               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
+```
+
+### Western Islands
+
+```{r}
+# Filter Lovongai data
+islands_tbl <- family_summary_by_region |> 
+  filter(region == "Western Islands", avg_biomass_m2 > 0) |>
+  arrange(desc(avg_biomass_m2)) |> 
+  mutate(`Family`                  = family,
+         `Total count`             = total_count,
+         `Avg. count`              = round(avg_count, 2),
+         `Freq. occurrence (%)`    = round(freq_obs, 2),
+         `Avg. abundance (ind/m²)` = round(avg_count_m2, 3),
+         `Avg. biomass (g/m²)`     = round(avg_biomass_m2, 3)) |>
+  select(family, `Total count`, `Avg. count`, `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`)
+
+# Render reactable
+tmp <- reactable(islands_tbl,
+                 filterable      = TRUE,
+                 pagination      = TRUE,
+                 defaultPageSize = 10,
+                 striped         = TRUE,
+                 highlight       = TRUE,
+                 elementId       = "summary-tbl",
+                 defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
+                 theme           = custom_tbl_theme,
+                 columns         = list(family                    = colDef(name = "Family", minWidth = 150),
+                                        `Freq. occurrence (%)`    = colDef(cell = function(value) paste0(value, "%"), align = "center"),
+                                        `Avg. biomass (g/m²)`     = colDef(cell = function(value) comma(value, accuracy = 0.001)),
+                                        `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
+  add_title("Fish families") |>
+  add_subtitle("Summary of fish families observed in the Western Islands",
+               font_size  = 20,
+               font_color = "#666666",
+               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
+```
+
+:::
