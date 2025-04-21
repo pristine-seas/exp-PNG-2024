@@ -1058,52 +1058,48 @@ biomass_model_emmeans$emmeans |>
 
 # Trophic Composition
 
-This section summarizes the distribution of biomass and abundance across major trophic groups, offering insight into the functional structure of reef fish assemblages across regions and depths.
+This section explores the distribution of fish biomass and abundance across major trophic groups, offering insight into the functional structure of reef fish assemblages and potential indicators of ecosystem health.
 
-## Overall patterns
-	•	Contribution of each trophic group to total biomass and abundance (stacked bar plots).
-	•	Emphasize dominant groups (e.g. planktivores, herbivores, piscivores).
-	
 ```{r}
-biomass_by_station_and_taxa |> 
-  group_by(ps_station_id, trophic_group) |> 
+library(plotly)
+#| label: fig-troph-by-region
+#| fig-cap: "Trophic composition by region"
+#| fig-width: 9
+
+trophic_palette <- c("Herbivore/Detritivore" = "#5C9E5C",   # Earthy green (natural, calming)
+                     "Planktivore"            = "#4C9CB2",   # Soft teal-blue (planktivores)
+                     "Lower-carnivore"        = "#E1B07E",   # Sandy ochre (mid-level predator)
+                     "Top-predator"           = "#C75D4D",   # Muted brick red (assertive but not harsh)
+                     "Shark"                  = "#7E6FAB",   # Deep slate violet (distinctive, dignified)
+                     "NA"                     = "#D0D0D0")    # Light neutral gray (non-disruptive)
+
+biomass_by_station_and_trophic <- biomass_by_station_and_taxa |> 
+  group_by(ps_station_id, depth_strata, trophic_group) |> 
   summarize(total_biomass_m2 = sum(avg_biomass_m2),
             total_count_m2   = sum(avg_count_m2),
             .groups = "drop") |> 
+  group_by(ps_station_id, depth_strata) |> 
+  mutate(frac_biomass = total_biomass_m2/sum(total_biomass_m2),
+         frac_count = total_count_m2/sum(total_count_m2)) |> 
   left_join(stations |> 
               distinct(ps_station_id, region, subregion), 
             by = "ps_station_id") |> 
-  group_by(region, subregion, trophic_group) |>
-  summarize(avg_biomass_m2 = mean(total_biomass_m2),
-            avg_count_m2   = mean(total_count_m2),
-            .groups = "drop") |> 
-  ggplot(aes(fct_reorder(subregion, avg_biomass_m2, sum, .desc = T), avg_biomass_m2, fill = trophic_group))+
-  geom_col()+
-  facet_wrap(~region, ncol = 4, scales = "free_x") +
-  labs(x = "", y = "Average biomass (g/m²)", fill = "",
-       title = "Average fish biomass by trophic group and region",
-       subtitle = "Stacked bar plots show the contribution of each trophic group to total biomass")+
-  theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        legend.position = "bottom",
-        legend.box = "horizontal")+
-  guides(fill = guide_legend(nrow = 1, byrow = TRUE))
-```
+  ungroup()
 
-```{r}
-biomass_by_station_and_taxa |> 
-  group_by(ps_station_id, trophic_group) |> 
-  summarize(total_biomass_m2 = sum(avg_biomass_m2),
-            total_count_m2   = sum(avg_count_m2),
-            .groups = "drop") |> 
-  left_join(stations |> 
-              distinct(ps_station_id, region, subregion), 
-            by = "ps_station_id") |> 
+biomass_by_region_and_trophic <- biomass_by_station_and_trophic |> 
   group_by(region, subregion, trophic_group) |>
   summarize(avg_biomass_m2 = mean(total_biomass_m2),
             avg_count_m2   = mean(total_count_m2),
-            .groups = "drop") |> 
+            .groups = "drop") 
+
+p <- biomass_by_region_and_trophic |> 
   ggplot(aes(fct_reorder(subregion, avg_count_m2, sum, .desc = T), avg_count_m2, fill = trophic_group))+
-  geom_col()+
+  geom_col(aes(text = paste0(
+    "Region: ", region, "<br>",
+    "Subregion: ", subregion, "<br>",
+    "Trophic group: ", trophic_group, "<br>",
+    "Avg. Abundance: ", round(avg_biomass_m2, 2), " ind/m²"
+  )))+
   facet_wrap(~region, ncol = 4, scales = "free_x") +
   labs(x = "", y = "Average Abundance (in/m²)", fill = "",
        title = "Average fish Abundance by trophic group and region",
@@ -1111,14 +1107,220 @@ biomass_by_station_and_taxa |>
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
         legend.position = "bottom",
         legend.box = "horizontal")+
+  guides(fill = guide_legend(nrow = 1, byrow = TRUE))+
+  scale_fill_manual(values = trophic_palette)
+
+# Convert to plotly with tooltips
+ggplotly(p, tooltip = "text") |> 
+  layout(legend = list(orientation = "h",
+      xanchor = "center",
+      x = 0.5,
+      y = -0.2,
+      title = list(text = "")))
+```
+
+```{r}
+#| label: fig-troph-by-subregion
+#| fig-cap: "Trophic composition by island"
+#| fig-width: 10
+#| fig-height: 8
+#| 
+library(plotly)
+
+# Prepare the summarized data
+plot_data <- biomass_by_station_and_trophic |>
+  group_by(region, subregion, trophic_group) |>
+  summarize(avg_biomass_m2 = mean(total_biomass_m2), .groups = "drop") |>
+  mutate(subregion = fct_reorder(subregion, avg_biomass_m2, .fun = sum, .desc = TRUE))
+
+# Build the ggplot
+p <- ggplot(plot_data, 
+            aes(x = subregion, y = avg_biomass_m2, fill = trophic_group)) +
+  geom_col(aes(text = paste0(
+    "Region: ", region, "<br>",
+    "Subregion: ", subregion, "<br>",
+    "Trophic group: ", trophic_group, "<br>",
+    "Avg. biomass: ", round(avg_biomass_m2, 2), " g/m²"
+  ))) +
+  facet_wrap(~region, ncol = 4, scales = "free_x") +
+  labs(x = "", y = "Average biomass (g/m²)", fill = "",
+    title = "Average fish biomass by trophic group and region",
+    subtitle = "Stacked bar plots show the contribution of each trophic group to total biomass") +
+  scale_fill_manual(values = trophic_palette) +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom",
+    legend.box = "horizontal") +
+  guides(fill = guide_legend(nrow = 1, byrow = TRUE))
+
+# Convert to plotly with tooltips
+ggplotly(p, tooltip = "text") |> 
+  layout(legend = list(orientation = "h",
+      xanchor = "center",
+      x = 0.5,
+      y = -0.2,
+      title = list(text = "")))
+```
+
+To test whether the relative biomass of trophic groups differed significantly among regions, we used Kruskal-Wallis tests for each group. Only planktivores showed a moderate regional effect (χ² = 9.16, p = 0.027). Post hoc comparisons indicated that the proportional biomass of planktivores was higher in Lovongai than in other regions, but these differences did not remain significant after correcting for multiple comparisons (padj = 0.051 for Lovongai vs Western Islands). We found no evidence for regional differences in the proportion of biomass contributed by top predators or sharks, two key indicators of reef health.
+
+```{r}
+#| label: fig-troph-prop-by-region
+#| fig-cap: "Proportion of Biomass by Trophic Group and Region"
+#| fig-width: 9
+#| 
+
+kruskal_results <- biomass_by_station_and_trophic |>
+  filter(!is.na(trophic_group)) |> 
+  group_by(trophic_group) |> 
+  rstatix::kruskal_test(frac_biomass ~ region)
+
+# Filter for Planktivores and run pairwise comparisons
+dunn_results <- biomass_by_station_and_trophic |> 
+  ungroup() |> 
+  filter(trophic_group == "Planktivore") |> 
+  mutate(region = as.factor(region)) |> 
+  rstatix::dunn_test(frac_biomass ~ region, p.adjust.method = "bonferroni")
+
+biomass_by_station_and_trophic |> 
+  filter(!is.na(trophic_group)) |> 
+  ggplot() +
+  geom_boxplot(aes(x = region, y = frac_biomass, fill = trophic_group),
+               outlier.shape = NA, alpha = 0.6)+
+  geom_jitter(aes(x = region, y = frac_biomass, color = trophic_group),
+              position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75),
+              size = 1.5,
+              alpha = 0.6,
+              show.legend = FALSE)+
+  labs(title = "Proportion of Biomass by Trophic Group and Region",
+       y = "Proportion of Total Biomass",
+       x = NULL,
+       fill = "") +
+  scale_fill_manual(values = trophic_palette)+
+  scale_color_manual(values = trophic_palette)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "top",
+        legend.direction = "horizontal",
+        legend.title = element_text(face = "bold"),
+        legend.box = "horizontal",
+        legend.text = element_text(size = 11),
+        legend.spacing.x = unit(0.4, "cm")) +
   guides(fill = guide_legend(nrow = 1, byrow = TRUE))
 ```
 
-## spatial trends
 
-Regional comparisons of trophic structure (e.g. group-wise proportions per region).
-	•	Depth-stratified breakdowns, if patterns emerge.
-	
+```{r}
+library(plotly)
+
+fig <- plot_ly(
+  data = biomass_by_station_and_trophic |> filter(!is.na(trophic_group)),
+  x = ~region,
+  y = ~frac_biomass,
+  color = ~trophic_group,
+  colors = trophic_palette,
+  type = "box",
+  boxpoints = "all",       # show individual points
+  jitter = 0.3,
+  pointpos = -1.8,
+  marker = list(size = 4, opacity = 0.6),
+  line = list(width = 1),
+  hoverinfo = "text",
+  text = ~paste0(
+    "Region: ", region, "<br>",
+    "Trophic group: ", trophic_group, "<br>",
+    "Station: ", ps_station_id, "<br>",
+    "Biomass fraction: ", round(frac_biomass, 3))
+)
+
+fig <- fig %>% layout(
+  title = list(
+    text = "Proportion of Biomass by Trophic Group and Region",
+    font = list(size = 18)
+  ),
+  yaxis = list(title = "Proportion of Total Biomass"),
+  xaxis = list(title = "", tickangle = 45),
+  boxmode = "group",
+  legend = list(
+    orientation = "h",
+    x = 0.5, xanchor = "center",
+    y = -0.2,
+    font = list(size = 12)
+  )
+)
+
+fig
+```
+
+We evaluated multivariate differences in trophic structure using PERMANOVA. Depth strata emerged as the strongest predictor of trophic composition (R² = 7.9%, F = 7.20, p = 0.001), followed by region (R² = 3.4%, F = 2.07, p = 0.028). Together, these variables explained ~11% of the total variation, with the remainder attributed to within-region and within-strata heterogeneity.
+
+```{r}
+trophic_matrix <- biomass_by_station_and_trophic |>
+  select(ps_station_id, trophic_group, frac_biomass) |>
+  pivot_wider(names_from = trophic_group, values_from = frac_biomass, values_fill = 0) |>
+  column_to_rownames("ps_station_id")
+
+trophic_meta <- biomass_by_station_and_trophic |>
+  distinct(ps_station_id, region, depth_strata) |>
+  filter(ps_station_id %in% rownames(trophic_matrix)) |> 
+  arrange(match(ps_station_id, rownames(trophic_matrix)))
+
+adonis_trophic <- adonis2(trophic_matrix ~  depth_strata + region, 
+                          by = "margin",
+                          data = trophic_meta, 
+                          permutations = 999, 
+                          method = "bray")
+```
+
+Finally, we used non-metric multidimensional scaling (NMDS) to visualize patterns in trophic composition across sites. Ordination revealed clustering by depth strata, confirming the PERMANOVA results. Vector fitting indicated that three trophic groups were significantly associated with the ordination space (all p < 0.05), with vector length proportional to explanatory power (R² > 0.8). These results emphasize depth-driven shifts in functional structure, with moderate but detectable regional variation.
+
+```{r message = F, warning = F}
+# 1. NMDS
+nmds_result <- metaMDS(trophic_matrix, distance = "bray", k = 2, trymax = 100)
+
+# 2. Fit trophic group vectors to ordination
+fit <- envfit(nmds_result, trophic_matrix, permutations = 999)
+
+# 3. Extract and filter vectors
+vecs <- as.data.frame(scores(fit, display = "vectors")) |>
+  rownames_to_column("variable") |>
+  mutate(pval = fit$vectors$pvals[variable],
+         r2   = fit$vectors$r[variable]) |>
+  filter(pval < 0.05 & r2 > 0.3)  # Optional R² threshold
+
+# Filter to significant vectors (p < 0.05)
+vecs_sig <- vecs |> filter(pval < 0.05)
+
+# 4. Site coordinates + metadata
+nmds_coords <- as.data.frame(scores(nmds_result, display = "sites")) |>
+  bind_cols(trophic_meta)
+
+# 5. NMDS Plot
+ggplot(nmds_coords, aes(x = NMDS1, y = NMDS2, color = depth_strata)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(type = "t", level = 0.68, linetype = "dashed", linewidth = 0.6) +
+  geom_segment(data = vecs,
+               aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2),
+               arrow = arrow(length = unit(0.25, "cm")), color = "black") +
+  geom_text(
+  data = vecs_sig,
+  aes(x = NMDS1 * 1.1,
+      y = NMDS2 * 1.1,
+      label = paste0(variable, "\nR² = ", round(r2, 2))),
+  inherit.aes = FALSE,
+  size = 5
+)+
+  labs(
+    title = "NMDS of Trophic Composition with Vector Fit",
+    subtitle = paste("Bray-Curtis dissimilarity | Stress =", round(nmds_result$stress, 3)),
+    caption = "Arrows indicate significant (p < 0.05) trophic group vectors; length reflects strength of correlation (R²).",
+    x = "NMDS1",
+    y = "NMDS2",
+    color = ""
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "bottom")
+```
+
 # Community Structure
 
 

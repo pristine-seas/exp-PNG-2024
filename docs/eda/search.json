@@ -31,7 +31,14 @@
     "objectID": "eda_fish.html#spatial-trends",
     "href": "eda_fish.html#spatial-trends",
     "title": "Exploratory Analysis of Fish Survey Data",
-    "section": "6.2 spatial trends",
-    "text": "6.2 spatial trends\nRegional comparisons of trophic structure (e.g. group-wise proportions per region). • Depth-stratified breakdowns, if patterns emerge."
+    "section": "6.1 spatial trends",
+    "text": "6.1 spatial trends\nRegional comparisons of trophic structure (e.g. group-wise proportions per region). • Depth-stratified breakdowns, if patterns emerge."
+  },
+  {
+    "objectID": "eda_fish.html#top-predators",
+    "href": "eda_fish.html#top-predators",
+    "title": "Exploratory Analysis of Fish Survey Data",
+    "section": "6.1 top predators",
+    "text": "6.1 top predators\n\n\nCode\nbiomass_top_pred &lt;- biomass_by_station_and_trophic |&gt; \n  filter(trophic_group %in% c(\"Top-predator\")) |&gt; \n  group_by(ps_station_id, trophic_group, region) |&gt; \n  summarize(prop_top_pred = sum(frac_biomass), .groups = \"drop\") \n\nbiomass_top_pred |&gt; \n  ggplot(aes(x = region, y = prop_top_pred)) +\n  geom_boxplot(outlier.shape = NA, fill = \"#F08A4B\", alpha = 0.6) +\n  geom_jitter(width = 0.2, alpha = 0.6) +\n  labs(\n    title = \"Proportion of Biomass in Top Predators and Sharks\",\n    y = \"Proportion of Total Biomass\",\n    x = NULL\n  ) +\n  theme_minimal(base_size = 13)"
   }
 ]
