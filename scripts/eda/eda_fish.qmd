@@ -711,6 +711,12 @@ spp_model_emm_diver |>
 
 :::
 
+
+## Biodiversity surveys
+
+For a subset of station in Manus and the Western Islands provinces, we also conducted biodiversity surveys to assess the diversity of reef fish communities. These surveys were designed to complement the standardized transect surveys and provide a more comprehensive understanding of the fish assemblages in these regions.
+
+
 # Abundance
 
 ```{r}

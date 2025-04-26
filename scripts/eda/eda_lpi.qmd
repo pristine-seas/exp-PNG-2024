@@ -1,0 +1,1555 @@
+---
+title: "Exploratory Analysis of LPI Benthic Data"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    number-depth: 2
+    toc-location: right
+    code-fold: true
+    theme: cosmo
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
+options(scipen = 999)
+
+# Hook to format inline numeric expressions with comma separators:
+knitr::knit_hooks$set(inline = function(x) {
+  if (!is.numeric(x)) {
+    # For non-numeric values, just return as character
+    return(as.character(x))
+  }
+  # Format numbers with comma as big.mark, no scientific notation
+  format(x, big.mark = ",", scientific = FALSE)
+})
+
+library(PristineSeasR)
+library(sf)
+library(hms)
+library(readxl)
+library(janitor)
+library(lubridate)
+library(gt)
+library(pointblank)
+library(bigrquery)
+library(leaflet)
+library(leaflet.extras)
+library(glue)
+library(lme4)
+library(lmerTest)   # gives p-values for fixed effects
+library(emmeans)
+library(emmeans)
+library(multcomp)
+library(multcompView)
+library(multcomp)
+library(reactable)
+library(scales)
+library(reactablefmtr)
+library(parameters)
+library(tidyverse)
+library(ggrepel)
+library(plotly)
+library(tidytext)
+ggthemr::ggthemr("fresh")
+
+ps_paths <- PristineSeasR::get_sci_drive_paths()
+
+exp_id <- "PNG_2024"
+
+exp_path <- file.path(ps_paths$expeditions, str_replace(exp_id, "_", "-"))
+
+bigrquery::bq_auth(email = "marine.data.science@ngs.org")
+
+bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas")
+```
+
+```{r}
+# Load the data
+
+load(file = file.path(exp_path, "data", "primary", "processed", "lpi", "lpi_staging.RData"))
+
+sites <- read_rds(file.path(exp_path, "data/primary/processed/sites.rds"))
+
+uvs_sites <- sites$uvs
+
+region_names <- lpi_stations |> 
+  distinct(region) |> 
+  arrange(region) |> 
+  pull(region)
+
+# Create a clean inline string (e.g., "Lovongai, Manus, Murat, and Western Islands")
+region_list <- glue::glue_collapse(region_names, sep = ", ", last = ", and ")
+
+functional_group_order <- c("hard coral", "cca", "soft coral", "sponges", "erect algae", "encrusting algae", "turf", "sediment/rubble/barren", "other", "cyanobacteria")
+
+region_order <- c("Lovongai", "Murat", "Manus", "Western Islands")
+
+functional_palette <- c("hard coral"             = "#EA9E8D",
+                        "cca"                    = "#F1B6DA",
+                        "cyanobacteria"          = "#000000",
+                        "soft coral"             = "#B4D6D3",
+                        "sponges"                = "#F6C141",
+                        "sediment/rubble/barren" = "#BDBDBD",
+                        "encrusting algae"       = "#88B04B",     # sage green
+                        "erect algae"            = "#4DAF4A",     # bright macroalgal green
+                        "turf"                   = "#8C6D31",     # slate blue
+                        "other"                  = "#7C4D8E")
+
+region_palette <- c("Murat"           = "#20C997",  
+                    "Lovongai"        = "#F94144",  
+                    "Manus"           = "#577590",
+                    "Western Islands" = "#F9C74F")  
+
+habitat_palette <- c("fore reef"  = "#8BE0D4",  # clearer aqua — more readable than pale cyan
+                     "back reef"  = "#E67E7E",  # soft coral red — distinct but not too aggressive
+                     "channel"    = "#F4C542",  # golden yellow — fits reef + sand imagery
+                     "patch reef" = "#9370DB"  )
+```
+
+This document presents an exploratory analysis of benthic community structure from the **Pristine Seas: Papua New Guinea 2024** expedition. Using standardized Line Point-Intercept (LPI) surveys across diverse reef habitats and regions, we examine patterns in benthic richness, community composition, reef health indicators, and coral bleaching. The goal is to extract key ecological signals to inform downstream synthesis, conservation planning, and scientific reporting
+
+# Overview
+
+We begin by summarizing the expedition’s spatial coverage — including an interactive site map, sampling effort across regions, and an overview of the taxonomic and functional breadth captured during surveys.
+
+```{r}
+n_sites     <- length(unique(lpi_stations$ps_site_id))
+n_stations  <- nrow(lpi_stations)
+n_divers    <- length(unique(lpi_stations$diver))
+n_strata    <- length(unique(lpi_stations$depth_strata))
+n_regions   <- length(unique(lpi_stations$region))
+n_habitats  <- length(unique(lpi_stations$habitat))
+n_exposures <- length(unique(lpi_stations$exposure))
+```
+
+We sampled `r n_sites` unique reef sites, comprising `r n_stations` individual transect stations, spanning four distinct regions — `r region_list` — across gradients of depth, exposure, and habitat. Surveys were conducted by `r n_divers` divers across `r n_strata` depth strata and spanned a diverse set of environments: `r n_regions` regions, `r n_habitats` habitat types, and `r n_exposures` exposure categories. This broad sampling design supports a robust comparison of benthic communities across environmental gradients and geographic locations.
+
+## Interactive Map
+
+```{r}
+#| label: fig-map
+#| fig-cap: "Map of LPI survey stations"
+
+# Collapse to site level
+
+sites_map <- lpi_stations |> 
+  mutate(strata_label = glue::glue("{depth_strata} ({depth_m} m)")) |> 
+  group_by(ps_site_id, region, habitat, exposure, latitude, longitude) |> 
+  summarise(
+    strata_info = paste(unique(strata_label), collapse = "\n"),
+    n_stations  = n_distinct(ps_station_id),
+    .groups     = "drop")
+
+pal_region <- colorFactor(palette = region_palette, domain = sites_map$region)
+
+leaflet(sites_map) |> 
+  addProviderTiles(providers$Esri.WorldImagery) |> 
+  addCircleMarkers(lng = ~longitude,
+                   lat = ~latitude,
+                   fillColor = ~pal_region(region),
+                   radius = 6,
+                   fillOpacity = 0.85,
+                   stroke = T,
+                   weight = 1,
+                   color = "white",
+                   label = ~glue::glue("<strong>Site:</strong> {ps_site_id}<br>
+                                        <strong>Region:</strong> {region}<br>
+                                        <strong>Habitat:</strong> {habitat}<br>
+                                        <strong>Exposure:</strong> {exposure}<br>
+                                        <strong>Stations:</strong> {n_stations}<br>
+                                        <strong>Depth strata:</strong><br>{strata_info}") |>
+                     lapply(htmltools::HTML)) |> 
+  addLegend("bottomright", pal = pal_region, values = ~region, title = "Region") |> 
+  addMiniMap(position = "bottomleft") |> 
+  addScaleBar()|> 
+  addFullscreenControl()
+```
+
+## Effort Summary
+
+```{r}
+#| label: tbl-lpi-stations
+#| tbl-cap: "Number of LPI survey stations by habitat and depth strata"
+#| 
+lpi_stations |> 
+  group_by(region, habitat, depth_strata) |>
+  summarise(n = n_distinct(ps_station_id), .groups = "drop") |> 
+  pivot_wider(names_from = habitat, values_from = n, values_fill = 0) |> 
+  mutate(Total = rowSums(across(where(is.numeric)), na.rm = TRUE)) |>
+  gt(groupname_col = "region") |> 
+  tab_header(title = "Summary of sampling effort by region",
+             subtitle = "Number of stations surveyed by depth strata and habitat") |>
+  tab_spanner(label = "Reef Habitats", 
+              columns = c("fore reef", "back reef", "channel", "patch reef")) |> 
+  tab_style(style = list(cell_fill(color = "#f0f0f0"),
+                         cell_text(weight = "bold")),
+            locations = list(cells_column_labels(everything()),
+                             cells_column_spanners(spanners = "Reef Habitats"))) |>
+  opt_table_font(font = list(gt::google_font("Roboto"), default_fonts())) |>
+  opt_row_striping() |> 
+  tab_options(row_group.as_column = T,
+              table.width = pct(100),
+              table.font.size = "small") |> 
+  opt_vertical_padding(scale = 0.7) |> 
+  tab_source_note(source_note = "Depth stratum: supershallow (< 6 m), shallow (7 - 15 m), and deep (>= 15 m).") 
+```
+
+## Taxonomic Composition
+
+This section summarizes the overall taxonomic and functional structure of the benthic communities recorded during the expedition. It provides context for interpreting patterns in richness and composition, highlighting the diversity of morphotaxa observed and their ecological roles.
+
+```{r}
+n_obs    <- nrow(lpi_observations)
+n_stns   <- length(unique(lpi_observations$ps_station_id))
+n_taxa   <- length(unique(lpi_observations$morphotaxon))
+n_func   <- lpi_observations |> filter(!is.na(functional_group)) |> pull(functional_group) |> unique() |> length()
+
+sum_class <- lpi_morphotaxa |> 
+  filter(!is.na(kingdom)) |> 
+  group_by(kingdom, phylum, class) |> 
+  summarise(n_morphotaxa = n_distinct(morphotaxon), 
+            n_accepted   = n_distinct(accepted_aphia_id),
+            n_pts        = sum(contacts, na.rm = TRUE),
+            .groups = "drop")
+
+# Summarize morphotaxa, accepted names, and total contacts by functional group
+sum_func <- lpi_morphotaxa |> 
+  filter(!is.na(kingdom)) |> 
+  group_by(functional_group) |> 
+  summarise(n_morphotaxa = n_distinct(morphotaxon),
+            n_accepted   = n_distinct(accepted_aphia_id),
+            n_pts        = sum(contacts, na.rm = TRUE),
+            .groups = "drop")
+```
+
+The dataset includes `r n_obs` individual contact observations across `r n_stns` stations, representing `r n_taxa` unique morphotaxa assigned to `r n_func` functional groups, from `r n_distinct(sum_class$kingdom)` kingdoms and `r n_distinct(sum_class$phylum)` phyla. 
+
+```{r}
+#| label: fig-morphotaxa-by-class
+#| fig-cap: "**Distribution of Benthic Morphotaxa across Taxonomic Classes**"
+#| fig-width: 10
+#| fig-height: 8
+#| 
+
+# Summarize morphotaxa, accepted names, and total contacts by Kingdom → Phylum → Class
+
+plot_by_class <- sum_class |> 
+  ggplot(aes(x = reorder(kingdom, n_morphotaxa, sum),
+             y = n_morphotaxa,
+             fill = fct_reorder(class, n_morphotaxa),
+             text = paste0(
+               "<b>Kingdom:</b> ", kingdom, "<br>",
+               "<b>Phylum:</b> ", phylum, "<br>",
+               "<b>Class:</b> ", class, "<br>",
+               "<b>Morphotaxa (count):</b> ", n_morphotaxa, "<br>",
+               "<b>Accepted names:</b> ", n_accepted))) +
+  geom_col(color = "white", size = 0.3) +
+  paletteer::scale_fill_paletteer_d("Polychrome::palette36", na.value = "#e0e0e0") +
+  labs(title = "Taxonomic Composition of Benthic Morphotaxa",
+       x = NULL,
+       y = "Number of Morphotaxa",
+       fill = "Class") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+        legend.title = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.grid.major.x = element_blank()) 
+
+ggplotly(plot_by_class, tooltip = "text") |> 
+  layout(hoverlabel = list(bgcolor = "white",
+                           font = list(size = 12)))
+```
+
+Among functional groups, sponges (`r sum_func |> filter(functional_group == "sponges") |> pull(n_morphotaxa)` morphotaxa), erect algae (`r sum_func |> filter(functional_group == "erect algae") |> pull(n_morphotaxa)` morphotaxa), and soft corals (`r sum_func |> filter(functional_group == "soft coral") |> pull(n_morphotaxa)` morphotaxa) were particularly rich. 
+
+```{r}
+#| label: fig-morphotaxa-by-func
+#| fig-cap: "**Distribution of Benthic Morphotaxa across Functional Groups**"
+#| fig-width: 10
+#| fig-height: 8
+
+plot_by_func <- sum_func |> 
+  pivot_longer(cols = c(n_morphotaxa, n_accepted),
+               names_to = "type", values_to = "count") |>
+  mutate(type = recode(type,
+                       "n_morphotaxa" = "Morphotaxa",
+                       "n_accepted" = "Accepted Names")) |>
+  group_by(functional_group) |>
+  mutate(total = sum(count)) |>
+  ungroup() |>
+  mutate(functional_group = fct_reorder(functional_group, total)) |> 
+  ggplot(aes(x = count, y = functional_group, fill = type, text = paste(type, ":", count))) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  scale_fill_manual(values = c("Morphotaxa" = "#1f77b4", "Accepted Names" = "#ff7f0e")) +
+  labs(title = "Morphotaxa and Accepted Names by Functional Group",
+       x = "Count", y = NULL, fill = "") +
+  theme(legend.position = "top",
+        plot.title = element_text(face = "bold"))+
+  scale_x_continuous(expand = expansion(mult = c(0, 0.05))) 
+  
+# Then pass to plotly
+plotly::ggplotly(plot_by_func, tooltip = "text")
+```
+
+Importantly, field morphotaxa were consolidated to their lowest defensible taxonomic rank based on authoritative references (e.g., uncertain sponge morphotypes assigned to Porifera at the phylum level). This necessary step substantially reduced the number of distinct accepted names compared to field morphotaxa — particularly for groups like sponges and soft corals where fine-scale identification is notoriously difficult. 
+
+After consolidating morphotaxa to their lowest defensible taxonomic rank, the majority of benthic observations were classified at the species and genus levels across most functional groups (@tbl-morphotaxa-by-func).
+	
+```{r}
+#| label: tbl-morphotaxa-by-func
+#| tbl-cap: "Summary of morphotaxa by functional group and lowest defensible taxonomic rank"
+#| 
+sum_func_rank <- lpi_morphotaxa |> 
+  group_by(functional_group, rank) |> 
+  summarize(n = n_distinct(morphotaxon),
+            n_accepted = n_distinct(accepted_aphia_id),
+            n_pts = sum(contacts, na.rm = TRUE),
+            .groups = "drop") |> 
+  arrange(desc(n))
+
+sum_func_rank |>
+  arrange(desc(n)) |> 
+  gt(groupname_col = "functional_group", 
+     rowname_col = "rank") |>
+  tab_header(title = md("**Summary of Taxonomic Resolution by Functional Group**"),
+             subtitle = "Number of morphotaxa, accepted names, and point contacts at the lowest defensible rank") |>
+  tab_style(style = list(cell_fill(color = "#f9f9f9")),
+            locations = cells_body()) |>
+  tab_style(style = cell_text(weight = "bold", color = "black"),
+            locations = cells_column_labels(everything())) |>
+  cols_label(n = "Morphotaxa",
+             n_accepted = "Accepted Names",
+             n_pts = "Point Contacts") |>
+  cols_align(align = "center",
+             columns = everything()) |>
+  opt_row_striping() |>
+  tab_options(row_group.as_column = T,
+              table.font.size = "small",
+              row.striping.include_table_body = TRUE,
+              table.border.top.color = "white",
+              table.border.bottom.color = "white",
+              heading.title.font.size = 18,
+              heading.subtitle.font.size = 14,
+              heading.align = "center",
+              row.striping.background_color = "#f0f0f0",
+              column_labels.font.weight = "bold",
+              column_labels.background.color = "#e6e6e6",
+              data_row.padding = px(6))
+```
+
+
+# Benthic Richness
+
+This section explores variation in morphotaxon richness across environmental gradients (region, depth, exposure). A Poisson GLMM models richness as a function of key predictors, and species accumulation curves are used to assess sampling sufficiency.
+
+**Q1:** How does morphotaxon richness vary across regions, habitats, exposures, and depth strata?  
+**Q2:** Are some regions consistently more taxonomically rich than others?
+
+## Patterns
+
+```{r}
+richness_by_station <- lpi_observations |>
+  group_by(ps_station_id) |>
+  summarise(richness = n_distinct(morphotaxon[contacts > 0]), .groups = "drop") |>
+  left_join(lpi_stations, by = "ps_station_id") |> 
+  mutate(region = factor(region, levels = region_order))
+```
+
+::: {.panel-tabset}
+
+###### Region
+
+```{r , include = T, eval = T}
+#| label: fig-diversity-region
+#| fig-cap: "Morphotaxa richness by region"
+#| fig-width: 9
+#| 
+ggstatsplot::ggbetweenstats(data = richness_by_station, 
+                            x = region, 
+                            y = richness, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Morphotaxa Richness by Region", 
+                            xlab = "", ylab = "Number of morphotaxa per station")
+```
+
+###### Depth strata
+
+```{r , include = T, eval = T}
+#| label: fig-diversity-depth
+#| fig-cap: "Morphotaxa richnnes by depth"
+#| fig-width: 9
+ggstatsplot::ggbetweenstats(data = richness_by_station, 
+                            x = depth_strata, 
+                            y = richness, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Morphotaxa Richness by strata", 
+                            xlab = "", ylab = "Number of morphotaxa per station")
+```
+
+###### Diver
+
+```{r , include = T, eval = T}
+#| label: fig-diversity-diver
+#| fig-cap: "Morphotaxa richnnes by diver"
+#| fig-width: 9
+ggstatsplot::ggbetweenstats(data = richness_by_station, 
+                            x = diver, 
+                            y = richness, 
+                            mean.ci = TRUE,
+                            pairwise.comparisons = TRUE,
+                            p.adjust.method = "holm",
+                            type = "nonparametric",
+                            title = "Morphotaxa richness by diver", 
+                            xlab = "", ylab = "Number of morphotaxa per station")
+```
+
+:::
+
+
+## Statistical model
+
+We modeled morphotaxon richness per station using a Poisson GLMM, accounting for region, depth strata, and exposure, with site as a random effect (ps_site_id). Effect sizes are presented as incidence rate ratios (IRR) (@tbl-richness-model-summary)
+
+```{r}
+library(lme4)
+library(lmerTest)
+library(parameters)
+
+# Poisson GLMM with random intercept for site
+glmm_richness <- glmer(richness ~ region + depth_strata + exposure  + (1 | ps_site_id),
+                       data = richness_by_station,
+                       family = poisson())
+
+#performance::check_overdispersion(glmm_richness)
+
+glmm_richness_performance <- performance::model_performance(glmm_richness)
+
+
+model_summary <- model_parameters(glmm_richness, exponentiate = TRUE) |>  # Exponentiated coefficients (IRRs) tell you multiplicative effects on richness
+  filter(Effects == "fixed") |> 
+  mutate(across(c(Coefficient, SE, z, CI_low, CI_high), ~ round(.x, 2)),
+         `95% CI` = sprintf("[%.2f, %.2f]", CI_low, CI_high),
+         p        = case_when(is.na(p)             ~ "NA",
+                              p < 0.001            ~ "< .001",
+                              TRUE                 ~ formatC(as.numeric(p), format = "f", digits = 3))) |> 
+  select(Parameter, IRR = Coefficient, SE, `95% CI`, z, `p-value` = p) 
+```
+
+##### Summary
+
+The Poisson GLMM revealed significant regional differences in benthic morphotaxon richness across surveyed reefs. Stations in Murat exhibited 23% lower richness compared to the baseline region, Lovongai, while Manus showed a 16% increase, suggesting higher taxonomic diversity in that area. No meaningful effects were detected for depth strata or exposure, indicating that richness patterns were primarily structured by regional differences rather than local environmental gradients. The estimated baseline richness under reference conditions was approximately 19 morphotaxa per station. 
+
+```{r}
+#| label: tbl-richness-model-summary
+#| tbl-cap: "Model summary of morphotaxon richness"
+
+clean_parameter_labels <- function(param_vec) {
+  param_vec |>
+    str_replace("^\\(Intercept\\)$", "Intercept (baseline)") |>
+    str_replace("^region", "Region: ") |>
+    str_replace("^depth_strata", "Depth: ") |>
+    str_replace("^exposure", "Exposure: ") |>
+    str_replace_all("_", " ") |>
+    str_to_sentence() 
+  }
+
+model_summary |> 
+  mutate(Parameter = clean_parameter_labels(Parameter)) |> 
+  gt(rowname_col = "Parameter") |> 
+  tab_header(title = md("**Model Summary: Benthic Richness (Poisson GLMM)**"),
+             subtitle = "Fixed effects as incidence rate ratios (IRRs)") |>
+  tab_style( style = list(cell_fill(color = "#f9f9f9")),
+             locations = cells_body()) |> 
+  tab_style(style = cell_text(weight = "bold", color = "black"),
+            locations = cells_body(columns = vars(`p-value`),
+                                   rows = `p-value` == "< .001")) |> 
+  cols_align(align = "center") |> 
+  opt_row_striping() |> 
+  tab_options(table.font.size = "small",
+              row.striping.include_table_body = TRUE,
+              table.border.top.color = "white",
+              table.border.bottom.color = "white",
+              heading.title.font.size = 16,
+              heading.subtitle.font.size = 13,
+              row.striping.background_color = "#f0f0f0",
+              column_labels.font.weight = "bold")
+```
+
+
+The model's  **conditional R²** (`r round(glmm_richness_performance$R2_conditional, 2)`) indicates that **`r round(100 * glmm_richness_performance$R2_conditional, 0)`%** of the variation in richness is explained by both fixed (region, depth, exposure) and random effects (site-level variation). The **marginal R²**, representing variation explained by fixed effects alone, was `r round(glmm_richness_performance$R2_marginal, 2)`.
+
+##### Marginal Means
+
+Pairwise comparisons reveal that Murat consistently had lower benthic richness than the other regions, with significantly reduced richness compared to Lovongai, Manus, and the Western Islands (p < .001 in all cases)(@tbl-richness-emmeans-region). In contrast, richness differences among Lovongai, Manus, and Western Islands were not statistically significant, suggesting broadly comparable community diversity across these regions.
+
+```{r}
+#| label: tbl-richness-emmeans-region
+#| tbl-cap: "Pairwise regional comparisons of benthic richness"
+#| 
+library(emmeans)
+
+emm_region <- emmeans(glmm_richness, ~ region, type = "response")
+
+pairs_region <- pairs(emm_region, adjust = "tukey")
+
+summary(pairs_region) |>
+  as_tibble() |>
+  mutate(ratio      = round(ratio, 2),
+         SE         = round(SE, 2),
+         z.ratio    = round(z.ratio, 2),
+         p.value    = case_when(
+           is.na(p.value) ~ "NA",
+           p.value < 0.001 ~ "< .001",
+           TRUE ~ formatC(p.value, format = "f", digits = 3))) |> 
+  select(contrast, ratio, SE, z.ratio, p.value) |> 
+  gt() |> 
+  tab_header(
+    title = md("**Pairwise Regional Comparisons: Benthic Richness**"),
+    subtitle = "Tukey-adjusted incidence rate ratios (IRRs)"
+  ) |>
+  tab_style(
+    style = list(cell_fill(color = "#f9f9f9")),
+    locations = cells_body()
+  ) |>
+  tab_style(
+    style = cell_text(weight = "bold", color = "black"),
+    locations = cells_body(columns = vars(`p.value`), rows = `p.value` == "< .001")
+  ) |>
+  cols_align(align = "center") |>
+  opt_row_striping() |>
+  tab_options(
+    table.font.size = "small",
+    row.striping.include_table_body = TRUE,
+    table.border.top.color = "white",
+    table.border.bottom.color = "white",
+    heading.title.font.size = 16,
+    heading.subtitle.font.size = 13,
+    row.striping.background_color = "#f0f0f0",
+    column_labels.font.weight = "bold"
+  )
+```
+
+```{r}
+# Estimated marginal means by region
+
+emm_region |> 
+  cld(adjust = "tukey", Letters = letters, alpha = 0.05) |> 
+  ggplot(aes(x = reorder(region, rate), y = rate))+
+  geom_point()+
+  geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, color = "#065A82")+
+  geom_text(aes(label = .group), vjust = -1, hjust = 0.05, size = 5, fontface = "bold")+
+  labs(title = "Estimated Species Richness by Region",
+       subtitle = "Letters indicate groups that are not significantly different (Tukey-adjusted, α = 0.05)",
+       x = NULL,
+       y = "Estimated richness (± 95% CI)") +
+  expand_limits(y = 0)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Species accumulation curves
+
+To assess how benthic morphotaxon richness accumulates with increasing sampling effort, we generated species accumulation curves for each region based on presence-weighted morphotaxon cover data (@fig-acc-curves). These curves visualize how the number of unique morphotaxa increases as additional stations are sampled, providing insight into both regional diversity and sampling completeness. The shaded bands reflect variability among sites, giving an indication of habitat heterogeneity and community turnover within regions.
+
+```{r}
+#| label: fig-acc-curves
+#| fig-cap: "Morphotaxa accumulation curves by region"
+#| fig-width: 8
+
+library(vegan)
+
+# Species matrix with one row per station × region
+taxa_cover_matrix <- cover_by_station_and_taxa |> 
+  left_join(lpi_stations |> distinct(ps_station_id, region), by = "ps_station_id") |> 
+  filter(contacts > 0) |> 
+  select(region, ps_station_id, morphotaxon, contacts) |> 
+  pivot_wider(id_cols = c(region, ps_station_id),
+              names_from = morphotaxon,
+              values_from = contacts,
+              values_fill = list(contacts = 0) )
+
+# 1. Nest species matrix by region
+
+taxa_nested <- taxa_cover_matrix |> 
+  group_by(region) |> 
+  nest()
+
+# 2. Compute specaccum per region
+accum_curves <- taxa_nested |> 
+  mutate(
+    acc = map(data, ~ specaccum(select(.x, where(is.numeric)), method = "random")),
+    curve = map(acc, ~ tibble(
+      station_number = .x$sites,
+      richness = .x$richness,
+      sd = .x$sd
+    ))
+  ) |> 
+  select(region, curve) |> 
+  unnest(curve)
+
+# 3. Plot
+ggplot(accum_curves, aes(x = station_number, y = richness, color = region, fill = region)) +
+  geom_line(linewidth = 1) +
+  geom_ribbon(aes(ymin = richness - sd, ymax = richness + sd), alpha = 0.2, color = NA) +
+  labs(title = "Morphotaxa Accumulation Curves by Region",
+       x = "Number of Stations",
+       y = "Accumulated Morphotaxa Richness") +
+  theme(legend.position = "bottom")+
+  labs(fill = "", col = "")
+```
+
+Species accumulation patterns reveal marked regional differences in benthic diversity. Manus and Western Islands stand out as the most species-rich and heterogeneous, with curves that continue to rise and broad confidence bands. Lovongai shows moderate richness and appears to be more completely sampled, while Murat exhibits the lowest richness and least variability. Together, these curves provide a baseline for comparing biodiversity across regions and evaluating the sufficiency of sampling efforts.
+
+# Community Structure
+
+We characterize benthic community structure based on morphotaxa-level composition. Using PERMANOVA, we test for significant differences across regions, depth strata, exposures, and habitats. We then visualize patterns through non-metric multidimensional scaling (NMDS) ordination.
+
+Key Questions
+Q1: Do benthic assemblages differ significantly by region, habitat, exposure, or depth?
+Q2: Which morphotaxa dominate community composition?
+
+#### Composition
+
+We begin by visualizing the average contribution of each morphotaxon to benthic cover within each subregion, identifying dominant taxa and examining patterns of taxonomic composition across space.
+
+```{r}
+#| label: fig-morph-comp
+#| fig-cap: "Morphotaxa composition by subregion"
+#| fig-width: 10
+#| fig-height: 10
+
+# For each region, expand all combinations of observed morphotaxa × stations, making zeros where missing — but never introduce a taxon that was not observed in the region.
+
+morph_cover_by_subregion <- cover_by_station_and_taxa |> 
+  ungroup() |> 
+  left_join(lpi_stations |> select(ps_station_id, region, subregion), by = "ps_station_id") |> 
+  group_by(region) |> 
+  complete(nesting(functional_group, morphotaxon, accepted_name), 
+           nesting(ps_station_id, subregion),
+           fill = list(contacts = 0, pct_cover = 0)) |> 
+  ungroup() |> 
+  group_by(region, subregion, morphotaxon) |> 
+  summarize(cover = mean(pct_cover, na.rm = TRUE), .groups = "drop")
+
+
+plot_df <- morph_cover_by_subregion |> 
+  mutate(label = if_else(cover > 1, morphotaxon, "Other")) |> 
+  mutate(label = fct_reorder(label, cover, .desc = FALSE))
+
+# Get all unique labels that will appear
+all_labels <- unique(plot_df$label)
+
+set.seed(123) 
+
+# Pull a large palette (Named has ~100 colors)
+large_palette <- paletteer::paletteer_d("palettesForR::Named") |> as.character() |> sample()
+
+# Create the initial mapping
+palette_mapping <- setNames(large_palette[1:length(all_labels)], all_labels)
+
+# Now, override with functional_palette colors if available
+# Assuming `functional_palette` is your functional group palette like:
+# functional_palette <- c("hard coral" = "#F8766D", "sponges" = "#00BFC4", etc.)
+
+for (label in names(functional_palette)) {
+  if (label %in% names(palette_mapping)) {
+    palette_mapping[label] <- functional_palette[label]
+  }
+}
+
+
+# Plot
+morph_plot <- morph_cover_by_subregion |> 
+  mutate(label = if_else(cover > 1, morphotaxon, "Other")) |> 
+  mutate(label = fct_reorder(label, cover, .desc = FALSE)) |> 
+  ggplot(aes(x = subregion, y = cover, fill = label,
+             text = paste0("Morphotaxon: ", label, "<br>",
+                           "Mean Cover: ", round(cover, 1), "%")))+
+  geom_col() +
+  scale_fill_manual(values = palette_mapping) +
+  labs(title = "Dominant Morphotaxa Across Subregions",
+    subtitle = "Morphotaxa contributing >1% mean cover shown individually; others grouped under 'Other'.",
+    x = NULL,
+    y = "Mean % Cover",
+    fill = "") +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 13),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.y = element_text(face = "bold"),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.key.height = unit(0.4, "cm"),
+    legend.key.width = unit(0.8, "cm"),
+    legend.box = "vertical"
+  ) +
+  guides(fill = guide_legend(ncol = 1)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+
+# Make it interactive
+morph_plotly <- ggplotly(morph_plot, tooltip = "text") |> 
+  layout(legend = list(orientation = "v",  # vertical
+                       x = 1.05,           # a bit outside the plot
+                       y = 1,
+                       xanchor = "left",
+                       yanchor = "top"))
+
+morph_plotly
+```
+
+#### PERMANOVA
+
+```{r}
+# 1. Create community matrix (stations × morphotaxa)
+
+cover_matrix <- cover_by_station_and_taxa |>
+  select(ps_station_id, morphotaxon, pct_cover) |>
+  pivot_wider(names_from = morphotaxon, values_from = pct_cover, values_fill = 0) |>
+  column_to_rownames("ps_station_id")
+
+# 2. Prepare station metadata
+station_meta <- lpi_stations |>
+  select(ps_station_id, region, habitat, depth_strata, exposure)
+
+# 3. ADONIC
+
+adonis_by_taxa <- adonis2(cover_matrix ~ region + depth_strata + habitat + exposure, 
+                           data = station_meta,
+                           method = "bray",
+                           permutations = 999,
+                           by = "margin")
+
+adonis_by_taxa_tbl <- broom::tidy(adonis_by_taxa) |> 
+  mutate(p_value = case_when(is.na(p.value)   ~ NA_character_,
+                             p.value <= 0.001 ~ "< .001",
+                             TRUE             ~ formatC(p.value, format = "f", digits = 3)),
+         across(c(R2, statistic, SumOfSqs), ~ round(.x, 3))) |> 
+  select(term, df, sumsq = SumOfSqs, r2 = R2, stat = statistic, p_value)
+```
+
+To test for differences in benthic community composition, we ran a PERMANOVA (adonis2) using Bray-Curtis dissimilarities derived from **morphotaxa percent cover**. The model included region, depth_strata, habitat, and exposure as predictors (@tbl-adonis-by-taxa). 
+
+Significant variation was detected by region (r2 = `r percent(adonis_by_taxa_tbl |> filter(term == "region") |> pull(r2), accuracy = 0.1)`, p = `r adonis_by_taxa_tbl |> filter(term == "region") |> pull(p_value)`), depth strata (r2 = `r percent(adonis_by_taxa_tbl |> filter(term == "depth_strata") |> pull(r2), accuracy = 0.1)`, p = `r adonis_by_taxa_tbl |> filter(term == "depth_strata") |> pull(p_value)`), and exposure (r2 = `r percent(adonis_by_taxa_tbl |> filter(term == "exposure") |> pull(r2), accuracy = 0.1)`, p = `r adonis_by_taxa_tbl |> filter(term == "exposure") |> pull(p_value)`), while habitat was not significant. 
+
+Overall, the model explained `r percent(1 - (adonis_by_taxa_tbl |> filter(term == "Residual") |> pull(r2)), accuracy = 0.1)` of the total variance in benthic community composition.
+
+```{r}
+#| label: tbl-adonis-by-taxa
+#| tbl-cap: "PERMANOVA results for benthic community composition by functional group (Bray-Curtis dissimilarities)"
+#| 
+
+# Continue from your adonis_tbl
+adonis_by_taxa_tbl |> 
+  select(Term = term, Df = df, `Sum of Squares` = sumsq, `R²` = r2, `F-value` = stat, `p-value` = p_value) |> 
+  gt(rowname_col = "Term") |> 
+  tab_header(title = md("**PERMANOVA Results: Benthic Community Composition**"),
+             subtitle = "Bray-Curtis dissimilarity | 999 permutations") |> 
+  tab_style(style = list(cell_fill(color = "#f9f9f9")),
+            locations = cells_body()) |> 
+  tab_style(style = cell_text(weight = "bold", color = "black"),
+            locations = cells_body(columns = c(`p-value`), rows = `p-value` == "< .001")) |> 
+  cols_align(align = "center",
+             columns = everything()) |> 
+  opt_row_striping() |> 
+  tab_options(table.font.size = "small",
+              row.striping.include_table_body = TRUE,
+              table.border.top.color = "white",
+              table.border.bottom.color = "white",
+              heading.title.font.size = 16,
+              heading.subtitle.font.size = 13,
+              row.striping.background_color = "#f0f0f0",
+              column_labels.font.weight = "bold")
+```
+
+#### NMDS Ordination 
+
+```{r}
+# 3. NMDS ordination (2D)
+nmds_by_taxa <- suppressMessages(
+  metaMDS(cover_matrix,
+          distance = "bray",
+          k = 3,
+          trymax = 100,
+          autotransform = FALSE,
+          noshare = TRUE,
+          trace = 0))
+
+# 4. Fit morphotaxon vectors to NMDS
+envfit_by_taxa <- envfit(nmds_by_taxa,
+                      cover_matrix,
+                      permutations = 999)
+
+# 5. Extract significant morphotaxon vectors (p < 0.05 and r² > 0.3)
+nmds_taxa_vectors <- scores(envfit_by_taxa, display = "vectors") |>
+  as.data.frame() |>
+  rownames_to_column("morphotaxon") |>
+  mutate(pval = envfit_by_taxa$vectors$pvals[morphotaxon],
+         r2   = envfit_by_taxa$vectors$r[morphotaxon]) |>
+  filter(pval < 0.05, r2 > 0.3)
+
+# 6. NMDS site scores + metadata
+nmds_by_taxa_sites <- scores(nmds_by_taxa, display = "sites") |>
+  as.data.frame() |>
+  rownames_to_column(var = "ps_station_id") |>
+  left_join(station_meta, by = "ps_station_id")
+```
+
+We followed with a 2D NMDS (stress = `r round(nmds_by_taxa$stress, 3)`) to visualize spatial patterns in community structure.
+Points represent individual stations, colored by region and shaped by depth stratum. Overlaid ellipses capture 75% confidence contours for each region.
+
+```{r}
+#| label: fig-nmds-morpho
+#| fig-cap: "**NMDS Ordination of Benthic Community Structure**"
+#| fig-width: 8
+#| fig-height: 8
+#| 
+ggplot() +
+  geom_point(data = nmds_by_taxa_sites,
+             aes(x = NMDS1, y = NMDS2, color = region, shape = depth_strata),
+             size = 3, alpha = 0.9) +
+  geom_segment(data = nmds_taxa_vectors,
+               aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2),
+               arrow = arrow(length = unit(0.25, "cm")),
+               color = "gray40", linewidth = 0.8) +
+  geom_text_repel(data = nmds_taxa_vectors,
+                  aes(x = NMDS1, y = NMDS2, label = morphotaxon),
+                  size = 3, color = "gray20",
+                  segment.color = "grey50",
+                  max.overlaps = 15, min.segment.length = 0) +
+  stat_ellipse(data = nmds_by_taxa_sites,
+               aes(x = NMDS1, y = NMDS2, group = region, color = region),
+               linetype = "dashed", level = 0.75, linewidth = 0.6) +
+  labs(title = "NMDS Ordination of Benthic Community Structure",
+       subtitle = glue::glue("Bray-Curtis dissimilarity | Stress = {round(nmds_by_taxa$stress, 3)}"),
+       caption = "Arrows show morphotaxa significantly correlated with NMDS axes (p < 0.05, R² > 0.3).\nArrow length reflects correlation strength.",
+       x = "NMDS Axis 1", 
+       y = "NMDS Axis 2",
+       color = "", 
+       shape = "") +
+  coord_equal() +
+  theme(legend.position = "right",
+        legend.box = "vertical",
+        plot.title = element_text(face = "bold", size = 16),
+        plot.subtitle = element_text(size = 13),
+        plot.caption = element_text(size = 10, hjust = 0),
+        axis.title = element_text(face = "bold")) +
+  scale_color_manual(values = region_palette)
+```
+
+# Functional Group Structure
+
+Shifting to a broader ecological scale, we summarize benthic community structure by functional group (e.g., hard coral, CCA, algae, sponges). We assess differences in functional composition across regions and depth strata, supported by PERMANOVA and ordination analyses.
+
+#### Cover
+
+```{r}
+#| label: fig-cover-by-func-subregion
+#| fig-cap: "**Average Cover by Functional Group and Subregion**"
+#| fig-width: 10
+#| fig-height: 7
+
+# 1. Get average cover by functional group and subregion
+
+func_cover_by_station <- cover_by_station_and_taxa |> 
+  group_by(ps_station_id, functional_group) |> 
+  summarize(contacts = sum(contacts), .groups = "drop") |> 
+  group_by(ps_station_id) |> 
+  mutate(pct_cover = round(contacts / sum(contacts) * 100, 3)) 
+  
+func_cover_by_subregion <- func_cover_by_station |> 
+  left_join(lpi_stations |> 
+              distinct(ps_station_id, region, subregion)) |> 
+  group_by(region, subregion, functional_group) |>
+  summarize(n_stations =  n_distinct(ps_station_id),
+            avg_cover = mean(pct_cover, na.rm = TRUE), .groups = "drop") |> 
+  mutate(functional_group = factor(functional_group, levels = functional_group_order)) 
+
+func_cover_by_subregion |> 
+  group_by(subregion) |> 
+  mutate(avg_cover_rescaled = avg_cover / sum(avg_cover) * 100) |> 
+  ggplot(aes(x = subregion, y = avg_cover_rescaled, fill = fct_rev(functional_group)))+
+  geom_col()+
+  scale_fill_manual(values = functional_palette)+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom",
+        legend.box = "horizontal")+
+  facet_wrap(~region, ncol = 4, scales = "free_x")+
+  labs(y = "Avg. % Cover",
+       x = "",
+       title = "Average % Cover by Functional Group and Subregion",
+       fill = "")+
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+```
+
+```{r}
+#| label: fig-cover-by-func-region
+#| fig-cap: "**Average Cover by Functional Group and Region**"
+#| fig-width: 8
+#| fig-height: 7
+#| 
+func_cover_by_region <- func_cover_by_station |> 
+  left_join(lpi_stations |> 
+              distinct(ps_station_id, region, subregion)) |> 
+  group_by(region, functional_group) |>
+  summarize(n_stations =  n_distinct(ps_station_id),
+            avg_cover = mean(pct_cover, na.rm = TRUE), .groups = "drop") |> 
+  mutate(functional_group = factor(functional_group, levels = functional_group_order),
+         label_pct = paste0(round(avg_cover, 1), "%"))
+
+# Pie chart by region with percent labels
+
+func_cover_by_region |> 
+  group_by(region) |> 
+  mutate(avg_cover = avg_cover / sum(avg_cover) * 100) |> 
+  ggplot(aes(x = "", y = avg_cover, fill = functional_group)) +
+  geom_col(width = 1, color = "white") +
+  coord_polar(theta = "y") +
+  facet_wrap(~region, ncol = 2) +
+  scale_fill_manual(values = functional_palette) +
+  geom_text(aes(label = ifelse(avg_cover > 4, label_pct, "")),  # hide labels < 4% for clarity
+            position = position_stack(vjust = 0.5),
+            size = 3.5,
+            color = "white",
+            fontface = "bold") +
+  labs(title = "Relative Benthic Cover by Functional Group",
+       subtitle = "Average % cover per region",
+       fill = "",
+       x = NULL,
+       y = NULL) +
+  theme_void(base_size = 14) +
+  theme(strip.text = element_text(face = "bold", size = 14),
+        plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+        plot.subtitle = element_text(size = 13, hjust = 0.5),
+        legend.position = "bottom",
+        legend.title = element_text(face = "bold"),
+        legend.key.size = unit(0.4, "cm"),
+        legend.text = element_text(size = 11))
+```
+
+#### PERMANOVA
+
+```{r}
+# 1. Create community matrix (stations × morphotaxa)
+func_cover_matrix <- func_cover_by_station |>
+  select(ps_station_id, functional_group, pct_cover) |>
+  pivot_wider(names_from = functional_group, values_from = pct_cover, values_fill = 0) |>
+  column_to_rownames("ps_station_id")
+
+# 2. Prepare station metadata
+station_meta <- lpi_stations |>
+  select(ps_station_id, region, habitat, depth_strata, exposure)
+
+# 3. PERMANOVA
+
+adonis_func <- adonis2(func_cover_matrix ~ region + depth_strata + habitat + exposure, 
+                           data = station_meta,
+                           method = "bray",
+                           permutations = 999,
+                           by = "margin")
+
+adonis_func_tbl <- broom::tidy(adonis_func) |> 
+  mutate(p_value = case_when(is.na(p.value)   ~ NA_character_,
+                             p.value <= 0.001 ~ "< .001",
+                             TRUE             ~ formatC(p.value, format = "f", digits = 3)),
+         across(c(R2, statistic, SumOfSqs), ~ round(.x, 3))) |> 
+  select(term, df, sumsq = SumOfSqs, r2 = R2, stat = statistic, p_value)
+```
+
+To test for differences in benthic community composition, we ran a PERMANOVA (adonis2) using Bray-Curtis dissimilarities derived from **functional group percent cover**. The model included region, depth_strata, habitat, and exposure as predictors. 
+
+Significant variation was detected by region (r2 = `r percent(adonis_func_tbl |> filter(term == "region") |> pull(r2), accuracy = 0.1)`, p = `r adonis_func_tbl |> filter(term == "region") |> pull(p_value)`), depth strata (r2 = `r percent(adonis_func_tbl |> filter(term == "depth_strata") |> pull(r2), accuracy = 0.1)`, p = `r adonis_func_tbl |> filter(term == "depth_strata") |> pull(p_value)`), and exposure (r2 = `r percent(adonis_func_tbl |> filter(term == "exposure") |> pull(r2), accuracy = 0.1)`, p = `r adonis_func_tbl |> filter(term == "exposure") |> pull(p_value)`), while habitat was not significant. 
+
+Overall, the model explained `r percent(1 - (adonis_func_tbl |> filter(term == "Residual") |> pull(r2)), accuracy = 0.1)` of the total variance in benthic community composition.
+
+
+```{r}
+#| label: tbl-adonis-fun
+#| tbl-cap: "PERMANOVA results for benthic community composition by functional group (Bray-Curtis dissimilarities)"
+#| 
+
+# Continue from your adonis_tbl
+adonis_func_tbl |> 
+  select(Term = term, Df = df, `Sum of Squares` = sumsq, `R²` = r2, `F-value` = stat, `p-value` = p_value) |> 
+  gt(rowname_col = "Term") |> 
+  tab_header(title = md("**PERMANOVA Results: Benthic Community Composition**"),
+             subtitle = "Bray-Curtis dissimilarity | 999 permutations") |> 
+  tab_style(style = list(cell_fill(color = "#f9f9f9")),
+            locations = cells_body()) |> 
+  tab_style(style = cell_text(weight = "bold", color = "black"),
+            locations = cells_body(columns = c(`p-value`), rows = `p-value` == "< .001")) |> 
+  cols_align(align = "center",
+             columns = everything()) |> 
+  opt_row_striping() |> 
+  tab_options(table.font.size = "small",
+              row.striping.include_table_body = TRUE,
+              table.border.top.color = "white",
+              table.border.bottom.color = "white",
+              heading.title.font.size = 16,
+              heading.subtitle.font.size = 13,
+              row.striping.background_color = "#f0f0f0",
+              column_labels.font.weight = "bold")
+```
+
+#### NMDS Ordination
+
+```{r}
+# 3. NMDS ordination (2D)
+nmds_func <- suppressMessages(
+  metaMDS(func_cover_matrix,
+          distance = "bray",
+          k = 3,
+          trymax = 100,
+          autotransform = FALSE,
+          noshare = TRUE,
+          trace = 0))
+
+# 4. Fit functional_group vectors to NMDS
+envfit_func <- envfit(nmds_func,
+                      func_cover_matrix,
+                      permutations = 999)
+
+# 5. Extract significant functional_group vectors (p < 0.05 and r² > 0.3)
+nmds_func_vectors <- scores(envfit_func, display = "vectors") |>
+  as.data.frame() |>
+  rownames_to_column("functional_group") |>
+  mutate(pval = envfit_func$vectors$pvals[functional_group],
+         r2   = envfit_func$vectors$r[functional_group]) |>
+  filter(pval < 0.05, r2 > 0.3)
+
+# 6. NMDS site scores + metadata
+nmds_func_sites <- scores(nmds_func, display = "sites") |>
+  as.data.frame() |>
+  rownames_to_column(var = "ps_station_id") |>
+  left_join(station_meta, by = "ps_station_id")
+```
+
+We followed with a 2D NMDS (stress = `r round(nmds_func$stress, 3)`) to visualize spatial patterns in community structure.
+Points represent individual stations, colored by region and shaped by depth stratum. Overlaid ellipses capture 75% confidence contours for each region.
+
+```{r}
+#| label: fig-nmds-func
+#| fig-cap: "**NMDS Ordination of Benthic Community Structure by Functional Group**"
+#| fig-width: 8
+#| fig-height: 8
+#| 
+ggplot() +
+  geom_point(data = nmds_func_sites,
+             aes(x = NMDS1, y = NMDS2, color = region, shape = depth_strata),
+             size = 3, alpha = 0.9) +
+  geom_segment(data = nmds_func_vectors,
+               aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2),
+               arrow = arrow(length = unit(0.25, "cm")),
+               color = "gray40", linewidth = 0.8) +
+  geom_text_repel(data = nmds_func_vectors,
+                  aes(x = NMDS1, y = NMDS2, label = functional_group),
+                  size = 3, color = "gray20",
+                  segment.color = "grey50",
+                  max.overlaps = 15, min.segment.length = 0) +
+  stat_ellipse(data = nmds_func_sites,
+               aes(x = NMDS1, y = NMDS2, group = region, color = region),
+               linetype = "dashed", level = 0.75, linewidth = 0.6) +
+  labs(title = "NMDS Ordination of Benthic Community Structure",
+       subtitle = glue::glue("Bray-Curtis dissimilarity | Stress = {round(nmds_func$stress, 3)}"),
+       caption = "Arrows show functional groups significantly correlated with NMDS axes (p < 0.05, R² > 0.3).\nArrow length reflects correlation strength.",
+       x = "NMDS Axis 1", 
+       y = "NMDS Axis 2",
+       color = "", 
+       shape = "") +
+  coord_equal() +
+  theme(legend.position = "right",
+        legend.box = "vertical",
+        plot.title = element_text(face = "bold", size = 16),
+        plot.subtitle = element_text(size = 13),
+        plot.caption = element_text(size = 10, hjust = 0),
+        axis.title = element_text(face = "bold")) +
+  scale_color_manual(values = region_palette)
+```
+
+Envfit vectors show morphotaxa significantly associated with community structure (p < 0.05, R² > 0.3), offering insight into the dominant ecological drivers. 
+
+# Indicators of Reef Health
+
+Building on the characterization of community composition, we now focus on key benthic indicators of reef health: percent cover of live hard coral, crustose coralline algae (CCA), and benthic cyanobacteria. These metrics serve as essential proxies for reef condition, resilience, and stress. We summarize spatial patterns, statistically test for regional differences, and examine potential warning signs such as coral bleaching.
+	
+## Hard coral
+
+### Patterns
+
+```{r}
+func_cover_by_site <- func_cover_by_station |> 
+  left_join(lpi_stations |> distinct(ps_site_id, ps_station_id, region, subregion, latitude, longitude), by = "ps_station_id") |> 
+  group_by(region, subregion, ps_site_id, latitude, longitude, functional_group) |> 
+  summarise(pct_cover = mean(pct_cover)) |> 
+  ungroup() |> 
+  arrange(desc(pct_cover)) 
+
+# Step 1: Filter only hard coral
+hard_coral_cover <- func_cover_by_site |> 
+  filter(functional_group == "hard coral")
+
+# Define a color palette for % cover
+coral_palette <- colorNumeric(
+  palette = "YlOrRd", # You can change palette (e.g., "viridis", "plasma", "Blues")
+  domain = hard_coral_cover$pct_cover
+)
+
+# Step 7: Render interactive pie chart map
+leaflet(hard_coral_cover) |>
+  addProviderTiles(providers$Esri.WorldImagery) |>
+  addCircleMarkers(
+    lng = ~longitude,
+    lat = ~latitude,
+    radius = ~rescale(pct_cover, to = c(3, 10)), # scaled nicely
+    stroke = TRUE,            # Important: activate stroke
+    color = "black",          # Border color
+    weight = 0.7,             # Thin but visible border
+    opacity = 1,              # Full border opacity
+    fillColor = ~coral_palette(pct_cover),
+    fillOpacity = 0.85,       # Slight transparency inside
+    label = ~paste0(
+      "<strong>Site:</strong> ", ps_site_id, "<br>",
+      "<strong>Subregion:</strong> ", subregion, "<br>",
+      "<strong>Hard Coral Cover:</strong> ", round(pct_cover, 1), "%"
+    ) |> lapply(htmltools::HTML)
+  ) |>
+  addFullscreenControl(position = "topright") |>
+  addLegend(
+    position = "bottomright",
+    pal = coral_palette,
+    values = ~pct_cover,
+    title = "Hard Coral Cover (%)",
+    labFormat = labelFormat(suffix = "%"),
+    opacity = 1
+  )
+```
+
+```{r}
+func_cover_by_station |> 
+  filter(functional_group == "hard coral") |> 
+  left_join(lpi_stations |> select(ps_station_id, region, subregion), by = "ps_station_id") |> 
+  group_by(region, subregion) |> 
+  summarize(n_stations = n_distinct(ps_station_id),
+            avg_cover  = mean(pct_cover, na.rm = TRUE),
+            se_cover   = sd(pct_cover, na.rm = TRUE) / sqrt(n()), # Standard error
+            .groups = "drop") |> 
+  mutate(label_pct = paste0(round(avg_cover, 1), "%")) |> 
+  ggplot(aes(x = subregion, y = avg_cover, fill = region)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = avg_cover - se_cover, ymax = avg_cover + se_cover), 
+                width = 0.2, color = "grey") +
+  scale_fill_manual(values = region_palette) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom",
+        legend.box = "horizontal") +
+  labs(y = "Avg. % Cover",
+       x = "",
+       title = "Average % Hard Coral Cover by Subregion",
+       fill = "") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  facet_wrap(~region, ncol = 4, scales = "free_x")
+```
+
+### Statistical tests
+
+```{r}
+# Filter hard coral cover and join region info
+coral_cover_station <- func_cover_by_station |> 
+  filter(functional_group == "hard coral") |> 
+  left_join(lpi_stations |> distinct(ps_site_id, ps_station_id, region, subregion, depth_strata, exposure, habitat), by = "ps_station_id")
+
+# Simple stats but very misleading
+
+# By Region
+kruskal_region <- kruskal.test(pct_cover ~ region, data = coral_cover_station)
+
+# Pairwise comparisons if Kruskal-Wallis is significant
+pairwise_region <- pairwise.wilcox.test(coral_cover_station$pct_cover, coral_cover_station$region, p.adjust.method = "holm")
+```
+
+Hard coral cover varied across regions and environmental gradients, but only depth strata showed a statistically significant effect in the fitted beta GLMM.  Sites at shallower depths exhibited significantly higher hard coral cover compared to deep sites (Estimate = 0.35, p < .001), while no significant differences were detected among regions, exposure categories, or habitat types. 
+
+```{r}
+# NMuch better stats
+
+library(glmmTMB)
+
+# Beta regression (since % cover is 0-100)
+glmm_coral <- glmmTMB(pct_cover/100 ~ region + depth_strata + exposure + habitat + (1 | subregion/ps_site_id),
+                      data = coral_cover_station,
+                      family = beta_family(link = "logit"))
+
+# 1. Extract model parameters
+coral_glmm_summary <- parameters::model_parameters(glmm_coral, exponentiate = F) |>
+  mutate(CI = sprintf("[%.2f, %.2f]", CI_low, CI_high),
+         p = case_when(is.na(p)            ~ NA_character_,
+                       p < 0.001           ~ "< .001",
+                       TRUE                ~ formatC(p, format = "f", digits = 3))) |>
+  select(Parameter, Estimate = Coefficient, SE, CI, Z = z, `p-value` = p)
+
+# 2. Build gt table
+coral_glmm_summary |>
+  gt(rowname_col = "Parameter") |>
+  tab_header(title = md("**GLMM Results: Coral Cover by Region, Depth, Exposure, and Habitat**"),
+             subtitle = "Beta regression with logit link (n = 157 stations).") |>
+  tab_style(style = list(cell_fill(color = "#f9f9f9")),
+            locations = cells_body()) |>
+  tab_style(style = cell_text(weight = "bold", color = "black"),
+            locations = cells_body(columns = c(`p-value`), rows = `p-value` == "< .001")) |>
+  cols_align(align = "center") |>
+  opt_row_striping() |>
+  fmt_number(columns = c(Estimate, SE, Z),
+            decimals = 2) |>
+  tab_options(table.font.size = "small",
+              row.striping.include_table_body = TRUE,
+              table.border.top.color = "white",
+              table.border.bottom.color = "white",
+              heading.title.font.size = 16,
+              heading.subtitle.font.size = 13,
+              row.striping.background_color = "#f0f0f0",
+              column_labels.font.weight = "bold")
+```
+
+```{r}
+# 1. Predicted marginal means and significance letters
+emm_region_coral <- emmeans::emmeans(glmm_coral, ~ region, type = "response")
+
+pred_coral <- emm_region_coral |>
+  cld(adjust = "tukey", Letters = letters) |>
+  as_tibble() |>
+  mutate(mean_cover_pred = response * 100,
+    lower.CL = asymp.LCL * 100,
+    upper.CL = asymp.UCL * 100,
+    .group = str_trim(.group)
+  ) |>
+  select(region, mean_cover_pred, lower.CL, upper.CL, .group)
+
+# 2. Observed means and medians
+obs_coral <- coral_cover_station |>
+  group_by(region) |>
+  summarise(
+    mean_cover_obs = mean(pct_cover, na.rm = TRUE),
+    median_cover_obs = median(pct_cover, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+
+# 3. Combine
+plot_data <- left_join(obs_coral, pred_coral, by = "region")
+```
+
+Observed mean coral cover ranged from `r round(plot_data$mean_cover_obs[plot_data$region == "Murat"], 1)`% in Murat to `r round(plot_data$mean_cover_obs[plot_data$region == "Western Islands"], 1)`% in the Western Islands, with corresponding predicted mean covers from the model following a similar pattern but with wider uncertainty intervals. No significant pairwise differences among regions were detected based on the GLMM predictions (all regions sharing the same significance group “a”), indicating that while there is visible variation in coral cover across subregions, these differences were not statistically robust after accounting for environmental covariates and random site effects.
+
+```{r}
+# 4. Plot
+plot_data |>
+  pivot_longer(cols = c(mean_cover_obs, mean_cover_pred),
+               names_to = "type", values_to = "cover") |>
+  mutate(type = recode(type,
+                       mean_cover_obs = "Observed",
+                       mean_cover_pred = "Predicted")) |>
+  ggplot(aes(x = reorder(region, cover), y = cover, fill = type)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  geom_errorbar(data = plot_data,
+                aes(x = region, ymin = lower.CL, ymax = upper.CL),
+                inherit.aes = FALSE,
+                width = 0.2,
+                position = position_nudge(x = 0.2),
+                color = "black") +
+  geom_text(data = plot_data,
+            aes(x = region, y = upper.CL + 2, label = .group),
+            inherit.aes = FALSE,
+            size = 5,
+            fontface = "bold") +
+  scale_fill_manual(values = c("Observed" = "#1f77b4", "Predicted" = "#ff7f0e")) +
+  labs(title = "Observed and Predicted Coral Cover by Region",
+    x = NULL,
+    y = "Coral Cover (%)",
+    fill = "") +
+  coord_cartesian(ylim = c(0, NA)) +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 13),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.y = element_text(face = "bold"),
+    legend.position = "bottom",
+    legend.box = "horizontal")
+```
+
+
+### Bleaching
+
+For Sites 24 and after. 
+
+## CCA + Live Coral
+
+### Patterns
+
+```{r}
+# Step 1: Filter only hard coral
+cca_cover <- func_cover_by_site |> 
+  filter(functional_group == "cca")
+
+# Define a color palette for % cover
+cca_palette <- colorNumeric(
+  palette = "YlOrRd", # You can change palette (e.g., "viridis", "plasma", "Blues")
+  domain = cca_cover$pct_cover
+)
+
+# Step 7: Render interactive pie chart map
+leaflet(cca_cover) |>
+  addProviderTiles(providers$Esri.WorldImagery) |>
+  addCircleMarkers(
+    lng = ~longitude,
+    lat = ~latitude,
+    radius = ~rescale(pct_cover, to = c(3, 10)), # scaled nicely
+    stroke = TRUE,            # Important: activate stroke
+    color = "black",          # Border color
+    weight = 0.7,             # Thin but visible border
+    opacity = 1,              # Full border opacity
+    fillColor = ~cca_palette(pct_cover),
+    fillOpacity = 0.85,       # Slight transparency inside
+    label = ~paste0(
+      "<strong>Site:</strong> ", ps_site_id, "<br>",
+      "<strong>Subregion:</strong> ", subregion, "<br>",
+      "<strong>CCA Cover:</strong> ", round(pct_cover, 1), "%"
+    ) |> lapply(htmltools::HTML)
+  ) |>
+  addFullscreenControl(position = "topright") |>
+  addLegend(
+    position = "bottomright",
+    pal = cca_palette,
+    values = ~pct_cover,
+    title = "CCA Cover (%)",
+    labFormat = labelFormat(suffix = "%"),
+    opacity = 1
+  )
+```
+
+```{r}
+func_cover_by_station |> 
+  filter(functional_group == "cca") |> 
+  left_join(lpi_stations |> select(ps_station_id, region, subregion), by = "ps_station_id") |> 
+  group_by(region, subregion) |> 
+  summarize(n_stations = n_distinct(ps_station_id),
+            avg_cover  = mean(pct_cover, na.rm = TRUE),
+            se_cover   = sd(pct_cover, na.rm = TRUE) / sqrt(n()), # Standard error
+            .groups = "drop") |> 
+  mutate(label_pct = paste0(round(avg_cover, 1), "%")) |> 
+  ggplot(aes(x = subregion, y = avg_cover, fill = region)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = avg_cover - se_cover, ymax = avg_cover + se_cover), 
+                width = 0.2, color = "grey") +
+  scale_fill_manual(values = region_palette) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom",
+        legend.box = "horizontal") +
+  labs(y = "Avg. % Cover",
+       x = "",
+       title = "Average % CCA Cover by Subregion",
+       fill = "") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  facet_wrap(~region, ncol = 4, scales = "free_x")
+```
+
+## Cyanobateria
+
+### Patterns
+
+```{r}
+# Step 1: Filter only hard coral
+cyano_cover <- func_cover_by_site |> 
+  filter(functional_group == "cyanobacteria")
+
+# Define a color palette for % cover
+cyano_palette <- colorNumeric(
+  palette = "YlOrRd", # You can change palette (e.g., "viridis", "plasma", "Blues")
+  domain = cyano_cover$pct_cover
+)
+
+# Step 7: Render interactive pie chart map
+leaflet(cyano_cover) |>
+  addProviderTiles(providers$Esri.WorldImagery) |>
+  addCircleMarkers(
+    lng = ~longitude,
+    lat = ~latitude,
+    radius = ~rescale(pct_cover, to = c(3, 10)), # scaled nicely
+    stroke = TRUE,            # Important: activate stroke
+    color = "black",          # Border color
+    weight = 0.7,             # Thin but visible border
+    opacity = 1,              # Full border opacity
+    fillColor = ~cyano_palette(pct_cover),
+    fillOpacity = 0.85,       # Slight transparency inside
+    label = ~paste0(
+      "<strong>Site:</strong> ", ps_site_id, "<br>",
+      "<strong>Subregion:</strong> ", subregion, "<br>",
+      "<strong>Cyanobacteria Cover:</strong> ", round(pct_cover, 1), "%"
+    ) |> lapply(htmltools::HTML)
+  ) |>
+  addFullscreenControl(position = "topright") |>
+  addLegend(
+    position = "bottomright",
+    pal = cyano_palette,
+    values = ~pct_cover,
+    title = "Cyanobacteria Cover (%)",
+    labFormat = labelFormat(suffix = "%"),
+    opacity = 1
+  )
+```
+
+```{r}
+func_cover_by_station |> 
+  filter(functional_group == "cyanobacteria") |> 
+  left_join(lpi_stations |> select(ps_station_id, region, subregion), by = "ps_station_id") |> 
+  group_by(region, subregion) |> 
+  summarize(n_stations = n_distinct(ps_station_id),
+            avg_cover  = mean(pct_cover, na.rm = TRUE),
+            se_cover   = sd(pct_cover, na.rm = TRUE) / sqrt(n()), # Standard error
+            .groups = "drop") |> 
+  mutate(label_pct = paste0(round(avg_cover, 1), "%")) |> 
+  ggplot(aes(x = subregion, y = avg_cover, fill = region)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = avg_cover - se_cover, ymax = avg_cover + se_cover), 
+                width = 0.2, color = "grey") +
+  scale_fill_manual(values = region_palette) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom",
+        legend.box = "horizontal") +
+  labs(y = "Avg. % Cover",
+       x = "",
+       title = "Average % Cynobacteria Cover by Subregion",
+       fill = "") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  facet_wrap(~region, ncol = 4, scales = "free_x")
+```
+
+### Statistical tests
+
+We modeled cyanobacterial cover using a beta GLMM with site nested within subregion as random effects. Cyanobacteria cover was significantly lower in the Manus, Murat, and Western Islands regions compared to Lovongai. Depth, exposure, and habitat type did not have significant effects on cyanobacterial abundance. Random effects estimates were minimal, suggesting low additional variation between sites or subregions after accounting for region. Overall, regional differences were the primary structuring factor for cyanobacteria.
+
+```{r}
+# Filter hard coral cover and join region info
+cyano_cover_station <- func_cover_by_station |> 
+  filter(functional_group == "cyanobacteria") |> 
+  left_join(lpi_stations |> distinct(ps_site_id, ps_station_id, region, subregion, depth_strata, exposure, habitat), by = "ps_station_id")
+
+# NMuch better stats
+
+library(glmmTMB)
+
+# Beta regression (since % cover is 0-100)
+glmm_cyano <- glmmTMB(pct_cover/100 ~ region + depth_strata + exposure + habitat + (1 | subregion/ps_site_id),
+                      data = cyano_cover_station,
+                      family = beta_family(link = "logit"))
+
+# 1. Extract model parameters
+cyano_glmm_summary <- parameters::model_parameters(glmm_cyano, exponentiate = F) |>
+  mutate(CI = sprintf("[%.2f, %.2f]", CI_low, CI_high),
+         p = case_when(is.na(p)            ~ NA_character_,
+                       p < 0.001           ~ "< .001",
+                       TRUE                ~ formatC(p, format = "f", digits = 3))) |>
+  select(Parameter, Estimate = Coefficient, SE, CI, Z = z, `p-value` = p)
+
+# 2. Build gt table
+cyano_glmm_summary |>
+  gt(rowname_col = "Parameter") |>
+  tab_header(title = md("**GLMM Results: Cyano Cover by Region, Depth, Exposure, and Habitat**"),
+             subtitle = "Beta regression with logit link (n = 157 stations).") |>
+  tab_style(style = list(cell_fill(color = "#f9f9f9")),
+            locations = cells_body()) |>
+  tab_style(style = cell_text(weight = "bold", color = "black"),
+            locations = cells_body(columns = c(`p-value`), rows = `p-value` == "< .001")) |>
+  cols_align(align = "center") |>
+  opt_row_striping() |>
+  fmt_number(columns = c(Estimate, SE, Z),
+            decimals = 2) |>
+  tab_options(table.font.size = "small",
+              row.striping.include_table_body = TRUE,
+              table.border.top.color = "white",
+              table.border.bottom.color = "white",
+              heading.title.font.size = 16,
+              heading.subtitle.font.size = 13,
+              row.striping.background_color = "#f0f0f0",
+              column_labels.font.weight = "bold")
+```
+
+Although the GLMM detected significant negative coefficients for Murat, Manus, and Western Islands relative to Lovongai, post hoc comparisons using emmeans revealed no significant pairwise differences in cyanobacterial cover between regions after correcting for multiple comparisons. This suggests that while there is a general trend for lower cyanobacteria outside Lovongai, the differences are relatively modest and accompanied by substantial variability.
+
+```{r}
+# 1. Predicted marginal means and significance letters
+emm_region_cyano <- emmeans::emmeans(glmm_cyano, ~ region, type = "response")
+
+pred_cyano <- emm_region_cyano |>
+  cld(adjust = "tukey", Letters = letters) |>
+  as_tibble() |>
+  mutate(mean_cover_pred = response * 100,
+    lower.CL = asymp.LCL * 100,
+    upper.CL = asymp.UCL * 100,
+    .group = str_trim(.group)
+  ) |>
+  select(region, mean_cover_pred, lower.CL, upper.CL, .group)
+
+# 2. Observed means and medians
+obs_cyano <- cyano_cover_station |>
+  group_by(region) |>
+  summarise(
+    mean_cover_obs = mean(pct_cover, na.rm = TRUE),
+    median_cover_obs = median(pct_cover, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  )
+
+# 3. Combine
+plot_cyano_data <- left_join(obs_cyano, pred_cyano, by = "region")
+
+# 4. Plot
+plot_cyano_data |>
+  pivot_longer(cols = c(mean_cover_obs, mean_cover_pred),
+               names_to = "type", values_to = "cover") |>
+  mutate(type = recode(type,
+                       mean_cover_obs = "Observed",
+                       mean_cover_pred = "Predicted")) |>
+  ggplot(aes(x = reorder(region, cover), y = cover, fill = type)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  geom_errorbar(data = plot_cyano_data,
+                aes(x = region, ymin = lower.CL, ymax = upper.CL),
+                inherit.aes = FALSE,
+                width = 0.2,
+                position = position_nudge(x = 0.2),
+                color = "black") +
+  geom_text(data = plot_cyano_data,
+            aes(x = region, y = upper.CL + 2, label = .group),
+            inherit.aes = FALSE,
+            size = 5,
+            fontface = "bold") +
+  scale_fill_manual(values = c("Observed" = "#1f77b4", "Predicted" = "#ff7f0e")) +
+  labs(title = "Observed and Predicted Coral Cover by Region",
+    x = NULL,
+    y = "Coral Cover (%)",
+    fill = "") +
+  coord_cartesian(ylim = c(0, NA)) +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 13),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.title.y = element_text(face = "bold"),
+    legend.position = "bottom",
+    legend.box = "horizontal")
+```
+
+
+# Appendix
+
+- Summary tables
+- Downloadable reactables for cover and richness by station × taxon
+- Notes on uncertainty flags, anomalies, or data exclusions
