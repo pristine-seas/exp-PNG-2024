@@ -1152,6 +1152,9 @@ Building on the characterization of community composition, we now focus on key b
 ### Patterns
 
 ```{r}
+#| label: fig-map-coral
+#| fig-cap: "Map of hard coral cover by site"
+
 func_cover_by_site <- func_cover_by_station |> 
   left_join(lpi_stations |> 
               distinct(ps_site_id, ps_station_id, region, subregion, latitude, longitude), 
@@ -1746,6 +1749,9 @@ bleaching_by_subregion |>
 ### Patterns
 
 ```{r}
+#| label: fig-map-cyano
+#| fig-cap: "Map of cyanobacteria cover by site"
+#| 
 # Step 1: Filter only hard coral
 cca_cover <- func_cover_by_site |> 
   filter(functional_group == "cca")
@@ -1783,6 +1789,9 @@ leaflet(cca_cover) |>
 ```
 
 ```{r}
+#| label: fig-cyano-subregion
+#| fig-cap: "Cyanobacteria cover by subregion"
+
 func_cover_by_station |> 
   filter(functional_group %in%  c("cca", "hard coral")) |> 
   left_join(lpi_stations |> select(ps_station_id, region, subregion), by = "ps_station_id") |> 
@@ -1850,6 +1859,10 @@ leaflet(cyano_cover) |>
 ```
 
 ```{r}
+#| label: fig-cyano-by-subregion
+#| fig-cap: "**Average % Cyanobacteria Cover by Subregion**"
+#| fig-width: 8
+
 func_cover_by_station |> 
   filter(functional_group == "cyanobacteria") |> 
   left_join(lpi_stations |> select(ps_station_id, region, subregion), by = "ps_station_id") |> 
@@ -1894,8 +1907,6 @@ glmm_cyano <- glmmTMB(pct_cover/100 ~ region + depth_strata + exposure + habitat
                       data = cyano_cover_station,
                       family = beta_family(link = "logit"))
 
-
-glmm_cyano |> summary()
 # 1. Extract model parameters
 cyano_glmm_summary <- parameters::model_parameters(glmm_cyano, exponentiate = F) |>
   mutate(CI = sprintf("[%.2f, %.2f]", CI_low, CI_high),
@@ -1934,6 +1945,11 @@ cyano_glmm_summary |>
 However, when marginal means were back-transformed to the percent cover scale and confidence intervals computed, predicted cyanobacteria cover was relatively low across all regions (~4–8%) with overlapping 95% confidence intervals. While coefficient p-values indicated significant regional differences on the logit scale, the wide uncertainty in percent cover estimates suggests that absolute ecological differences between regions are small, and pairwise post-hoc comparisons may not all reach statistical significance after adjusting for multiple comparisons.
 
 ```{r}
+#| label: fig-cyano-emmeans
+#| fig-cap: "Observed vs. Predicted Cyanobacteria Cover by Region (with Tukey-adjusted group letters)"
+#| fig-width: 8
+#| fig-height: 5
+#| 
 # 1. Predicted marginal means and significance letters
 emm_region_cyano <- emmeans::emmeans(glmm_cyano, ~ region, type = "response")
 

@@ -3,15 +3,24 @@ project:
   output-dir: ../../docs/eda
 
 website:
-  title: "Fish Survey EDA"
+  title: "PNG-2024: Exploratory Data Analysis"
   navbar:
     left:
-      - href: eda_lpi.qmd
-        text: "LPI"
-      - href: eda_fish.qmd
-        text: "Fish"
+      - text: "LPI"
+        href: eda_lpi.qmd
+      - text: "Fish"
+        href: eda_fish.qmd
+  page-footer:
+    center: "© 2024 Your Organization. All rights reserved."
+    right: "[Source Code](https://github.com/your_repo)" # optional
+
 format:
   html:
     theme: cosmo
     toc: true
+    toc-depth: 3
     number-sections: true
+    code-fold: true
+    code-tools: true
+    smooth-scroll: true
+    link-external-newwindow: true
