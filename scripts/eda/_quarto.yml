@@ -6,8 +6,10 @@ website:
   title: "Fish Survey EDA"
   navbar:
     left:
+      - href: eda_lpi.qmd
+        text: "LPI"
       - href: eda_fish.qmd
-        text: "Exploratory Analysis"
+        text: "Fish"
 format:
   html:
     theme: cosmo
