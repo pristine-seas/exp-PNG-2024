@@ -1,0 +1,278 @@
+---
+title: "PNG_2024_uvs_inverts_cleaning"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+
+rm(list = ls())
+#options(repos="https://cran.rstudio.com" )
+library(tidyverse)
+library(stringi)
+library(stringr)
+library(EcolUtils)
+library(data.table)
+library(readxl)
+library(rredlist) # need to get an API to run
+library(taxize)
+library(dplyr)
+
+setwd("~/Documents/PS eDNA/PNG_2024/")
+```
+
+## UVS Inverts - cleaning file
+
+### File Cleaning
+
+```{r}
+invert<-read_excel("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/raw/benthos/PNG_2024_inverts_fieldsheet_MT.xlsx", sheet = 1)
+
+invert$ps_site_id<-"PNG_2024_uvs_"
+invert$site<-str_pad(invert$site, 3, pad = "0")
+invert$ps_site_id<-paste(invert$ps_site_id,invert$site, sep = "")
+
+invert$ps_station_id<-invert$ps_site_id
+invert$ps_station_id<-paste(invert$ps_station_id, invert$depth_m, sep="_")
+invert$ps_station_id <- paste0(invert$ps_station_id, "m")
+invert$exp_id<-"PNG_2024"
+invert$subregion<-invert$location
+invert$location<-NULL
+invert$site<-NULL
+invert$direction<-NULL
+invert<-invert %>% mutate(region = if_else(subregion %in% c( "Massau", "Emirau","Tench"),"Murat", "Lovongai"))
+invert<-invert[,c("exp_id","region","subregion", "ps_site_id","ps_station_id", "transect","depth_m","taxa","count","size_cm", "notes","observer" )]
+
+
+
+```
+
+### Taxonomy Cleaning
+
+```{r}
+# creating column with the c.f species and sp.
+invert<- invert %>%
+  mutate(cf_sp = ifelse(str_detect(taxa, "cf") | str_detect(taxa, "sp") ,invert$taxa,""))
+# Adding this to notes colums
+invert$notes<-paste(invert$cf_sp, invert$notes, sep = "    ")
+invert$notes<-gsub("NA","",invert$notes)
+invert$cf_sp<-NULL
+
+invert$taxa<-gsub(" sp.","",invert$taxa)
+invert$taxa<-gsub(" sp","",invert$taxa)
+invert$taxa<-gsub(" cf","",invert$taxa)
+invert$taxa<-gsub(" 1","",invert$taxa)
+invert$taxa<-gsub(" 2","",invert$taxa)
+invert$taxa<-gsub(" aff","",invert$taxa)
+invert$taxa<-gsub("1","",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Bohadaschia argus","Bohadschia argus",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Calcinus minitus","Calcinus minutus",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Cerithuyum echinatum","Cerithium echinatum",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Cilopagurua strigatus","Ciliopagurus strigatus",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Coraliiophia violacea","Coralliophila violacea",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Culcita novaeangliae","Culcita novaeguineae",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Crinoid","Crinoidea",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Dendrostrea folium","Dendostrea folium",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Fromia monilus","Fromia monilis",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Lambis lambia","Lambis lambis",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Linkia laevigata","Linckia laevigata",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Linkia multifora","Linckia multifora",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Lomia medusa","Loimia medusa",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Panularis versicolor","Panulirus versicolor",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Pearsonothuria graffei","Pearsonothuria graeffei",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Pendumndyloideum","Pedum spondyloideum",invert$taxa) # the sp. gsub removal screwed this entry up
+invert$taxa<-ifelse(invert$taxa == "Phyllidia carlsonhOffi","Phyllidia carlsonhoffi",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Phyllidiella carlsonhOffi","Phyllidia carlsonhoffi",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Phyllidiella elegans","Phyllidia elegans",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Pinctata margaritifera","Pinctada margaritifera",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Thelona anax","Thelenota anax",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Thurilla gracilis","Thuridilla gracilis",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Heteractis magnifica","Radianthus magnifica",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Ophiotrix","Ophiothrix",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Colomatulidae","Comatulida",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Thaididae","Muricidae",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Trochus niloticus","Rochia nilotica",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Heteractis paumotensis","Radianthus crispa",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Coraliiophia","Coralliophila",invert$taxa)
+invert$taxa<-ifelse(invert$taxa == "Drupa ricinus","Sistrum ricinus",invert$taxa)
+
+cleanTaxa<-distinct(invert[,c("taxa")])
+
+taxonomy_worms <- cleanTaxa$taxa %>% 
+  split(ceiling(seq_along(cleanTaxa$taxa)/20)) %>% 
+  furrr::future_map_dfr(worrms::wm_records_names) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(scientificname)) %>% 
+  mutate(rank = str_to_lower(rank),
+         taxon_id = if_else(!is.na(valid_aphia_id),
+                            paste0("WORMS:", valid_aphia_id),                        NA_character_)) %>% 
+  select(species = scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, taxon_authority = valid_authority, kingdom, phylum, class, order, family, genus) %>% 
+  distinct()
+
+## Lots of name issues
+bad_names<-anti_join(unique(invert[,c("taxa")]), taxonomy_worms[,c("taxon_valid_name")], by = c("taxa" ="taxon_valid_name"))
+sort(bad_names$taxa)
+# going back to correct and rerun taxaworms function
+
+# Without the bad names, exporting as data file cleaned.
+#write.csv(invert, "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/raw/benthos/Updated_PNG_2024_inverts_fieldsheet.csv", row.names = F)
+
+
+# what are the duplicates
+duped_taxa_worms <- taxonomy_worms %>% 
+  janitor::get_dupes(species) 
+
+deduped_taxa_worms <- duped_taxa_worms %>% 
+  filter(status %in% c("accepted")) %>% 
+  select(-dupe_count)
+
+taxonomy_worms <- taxonomy_worms %>% 
+  group_by(species) %>% 
+  filter(n() <= 1) %>% # remove duplicates
+  bind_rows(deduped_taxa_worms) # add deduped
+
+
+taxonomy_worms<-as.data.frame(taxonomy_worms[,c("species","genus","family", "order","class","phylum", "taxon_valid_name")])
+
+
+invert2<-left_join(invert, taxonomy_worms, by = c("taxa" = "species"))
+invert2$common_name<-"unk"
+
+invert2$common_name<-ifelse(invert2$phylum == "Annelida", "Worms",invert2$common_name)
+invert2$common_name<-ifelse(invert2$phylum == "Porifera", "Sponge",invert2$common_name)
+invert2$common_name<-ifelse(invert2$order == "Stomatopoda", "Stomatopod",invert2$common_name)
+invert2$common_name<-ifelse(invert2$order == "Actiniaria", "Sea anenome",invert2$common_name)
+invert2$common_name<-ifelse(invert2$class == "Crinoidea", "Crinoid",invert2$common_name) 	
+invert2$common_name<-ifelse(invert2$class == "Bivalvia", "Bivalves",invert2$common_name)
+invert2$common_name<-ifelse(invert2$class == "Gastropoda", "Snails",invert2$common_name)
+invert2$common_name<-ifelse(invert2$class == "Thecostraca", "Barnacles",invert2$common_name)
+invert2$common_name<-ifelse(invert2$class == "Asteroidea", "Sea stars",invert2$common_name)
+invert2$common_name<-ifelse(invert2$class == "Echinoidea", "Sea urchin",invert2$common_name)
+invert2$common_name<-ifelse(invert2$class == "Ophiuroidea", "Brittle stars",invert2$common_name)
+invert2$common_name<-ifelse(invert2$class == "Enopla", "Ribbon worms",invert2$common_name)
+invert2$common_name<-ifelse(invert2$class == "Palaeonemertea", "Ribbon worms",invert2$common_name)
+invert2$common_name<-ifelse(invert2$class == "Ascidiacea", "Tunciate",invert2$common_name)
+invert2$common_name<-ifelse(invert2$class == "Polychaeta", "Worms",invert2$common_name)
+invert2$common_name<-ifelse(invert2$class == "Holothuroidea", "Sea cucumber",invert2$common_name)
+invert2$common_name<-ifelse(invert2$phylum == "Platyhelminthes", "Flat worm",invert2$common_name)
+invert2$common_name<-ifelse(invert2$order == "Octopoda", "Octopus",invert2$common_name)
+invert2$common_name<-ifelse(invert2$class == "Polyplacophora", "Chiton",invert2$common_name)
+
+invert2$common_name<-ifelse(invert2$genus == "Tridacna" | invert2$genus == "Hippopus", "Giant clams",invert2$common_name)
+
+invert2$common_name<-ifelse(invert2$genus == "Pinctada", "Pearl oyster",invert2$common_name)
+
+invert2$common_name<-ifelse(invert2$genus == "Trochus", "Trochus",invert2$common_name)
+
+invert2$common_name<-ifelse(invert2$order == "Aplysiida" | invert2$order == "Cephalaspidea" | invert2$order == "Nudibranchia" | invert2$order == "Pleurobranchida", "Sea slugs",invert2$common_name)
+
+invert2$common_name<-ifelse(invert2$family == "Plakobranchidae" | invert2$family == "Volvatellidae", "Sea slugs",invert2$common_name)
+
+invert2$common_name<-ifelse(invert2$family == "Diogenidae" | invert2$family == "Paguridae", "Hermit crab",invert2$common_name)
+invert2$common_name<-ifelse(invert2$family == "Tetraliidae" | invert2$family == "Trapeziidae", "Coral crab",invert2$common_name)
+invert2$common_name<-ifelse(invert2$family == "Alpheidae" | invert2$family == "Palaemonidae"| invert2$family == "Stenopodidae", "Shrimp",invert2$common_name)
+invert2$common_name<-ifelse(invert2$family == "Palinuridae" | invert2$family == "Scyllaridae", "Lobster",invert2$common_name)
+invert2$common_name<-ifelse(invert2$family == "Trochidae", "Trochus",invert2$common_name)
+
+
+unk<-subset(invert2, common_name == "unk")
+sort(unk$taxa)
+setdiff(invert2$taxa, invert2$taxon_valid_name)
+
+```
+
+### Creating TaxaTable
+
+```{r}
+
+invert_taxa<-unique(invert2[,c("common_name","phylum","class","order","family","genus","taxa")])
+
+invert_taxa$species<-invert_taxa$taxa
+invert_taxa$species<-ifelse(invert_taxa$genus == invert_taxa$taxa, "", invert_taxa$species)
+invert_taxa$species<-ifelse(invert_taxa$family == invert_taxa$taxa, "", invert_taxa$species)
+invert_taxa$species<-ifelse(invert_taxa$class == invert_taxa$taxa, "", invert_taxa$species)
+invert_taxa<-invert_taxa[,c("common_name","phylum","class","order","family","genus","species", "taxa")]
+
+
+```
+
+#### Adding IUCN Data
+
+```{r}
+
+# The functions are super picky....need to get a list of species and not blanks or NA can be in that list
+# Sorting the species
+spp_check<- sort(unique(invert_taxa$species)[-which(unique(invert_taxa$species) %in% c(NA,""))])
+
+
+# this function is grabbing the lists within lists of the crazy annoting IUCN data and needs to be within the loop. Unfortunately, if the species is not known or hasn't been reviewed for IUCN, the function iucn_status which you use after you create a list of list from your species using iucn_summary from taxize won't work because there's an NA. It's irritable. Anyway, this was the only work aronud I could make work.
+
+get_elements <- function(x, element) {
+  if(is.list(x))
+  {
+    if(element %in% names(x)) x[[element]]
+    else lapply(x, get_elements, element = element)
+  }
+}
+
+share_list = list()
+for ( i in 1:length(spp_check)){
+  # grabbing the iucn_summary data for each species individually 
+    # even if it's NA, it will save into the sharelist
+  check<-iucn_summary(spp_check[i]) 
+ x<- get_elements(check, "red_list_category")
+ y<-unlist(get_elements(x, "code"))
+   share_list[i]<-do.call(rbind, lapply(y, data.frame))
+}
+# now have to convert the NA to a value cause otherwise when you unlist, it removes all the NA preventing you from merging back to the dataframe
+is.na(share_list) <- lengths(share_list) == 0
+# unlisting the list to a dataframe
+iucn_result<-as.data.frame(unlist(share_list))
+# creating a column name to then merge
+colnames(iucn_result)<-"iucn_status"
+# Need to add a row to the end because the last row was an NA and not added to the list in the loop
+iucn_result[nrow(iucn_result)+1,] <-NA
+# adding the species data back
+iucn_result$species<-spp_check
+
+# merging to dataframe
+invert_taxa_table<-left_join(invert_taxa, iucn_result, by = "species")
+# replacing NA with 0
+invert_taxa_table[is.na(invert_taxa_table) ]<- ""
+
+```
+
+## UVS Inverts - Densities
+
+```{r}
+
+invert_avg_by_site <- invert2 %>% 
+  filter(transect != "Off") %>%
+  group_by(ps_site_id, common_name, taxa) %>%
+  dplyr::summarise(count = sum(count), count_m2 = sum(count)/100)
+
+
+invert_avg_by_station <- invert2 %>% 
+  filter(transect != "Off") %>%
+  group_by(ps_station_id, common_name, taxa) %>%
+  dplyr::summarise(count = sum(count), count_m2 = sum(count)/50)
+
+
+### Teasing out the more important inverts
+
+resource_invert_densities<-invert_avg_by_site %>%
+  filter(common_name == "Giant clams" | common_name == "Sea cucumber" | common_name == "Trochus")
+
+
+
+raw_cleaned_inverts<-invert2
+raw_cleaned_inverts<-left_join(raw_cleaned_inverts, iucn_result, by = c("taxa"="species"))
+raw_cleaned_inverts$taxon_valid_name<-NULL
+
+# save(invert_avg_by_site, invert_avg_by_station, resource_invert_densities,invert_taxa_table, raw_cleaned_inverts,  file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/invert/PNG_2024_uvs_invert.RData")
+
+save(invert_avg_by_site, invert_avg_by_station, resource_invert_densities,invert_taxa_table, raw_cleaned_inverts,  file = "PNG_2024_uvs_invert.RData")
+
+```
