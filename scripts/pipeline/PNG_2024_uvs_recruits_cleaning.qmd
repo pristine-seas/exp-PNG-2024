@@ -153,14 +153,14 @@ recruit_density_by_station_genus <- recruit2 %>%
   mutate(count = 1)%>%
   group_by(ps_site_id, genus, depth_m, quadrats) %>%
   dplyr::summarise(count = sum(count)) %>%
-  dplyr::summarise(density = round((count/(quadrats*0.25)),2), count = count)
+  dplyr::summarise(count = count, ind_m2 = round((count/(quadrats*0.25)),2))
 
 
 recruit_density_by_station_family <- recruit2 %>% 
   mutate(count = 1)%>%
   group_by(ps_site_id, family, depth_m, quadrats) %>%
   dplyr::summarise(count = sum(count)) %>%
-  dplyr::summarise(density = round((count/(quadrats*0.25)),2), count = count)
+  dplyr::summarise(count = count, ind_m2 = round((count/(quadrats*0.25)),2))
 
 
 recruit_density_by_site_genus <- recruit2 %>% 
@@ -169,7 +169,7 @@ recruit_density_by_site_genus <- recruit2 %>%
   dplyr::summarise(count = sum(count)) %>%
   left_join(.,quads_dens, by = "ps_site_id", relationship = "many-to-many") %>%
   group_by(ps_site_id, genus) %>%
-  dplyr::summarise(density = round((count/amount),2))
+  dplyr::summarise(count = count, ind_m2 = round((count/amount),2))
 
 
 recruit_density_by_site_family <- recruit2 %>% 
@@ -178,7 +178,7 @@ recruit_density_by_site_family <- recruit2 %>%
   dplyr::summarise(count = sum(count)) %>%
  left_join(.,quads_dens, by = "ps_site_id", relationship = "many-to-many") %>%
   group_by(ps_site_id, family) %>%
-  dplyr::summarise(density = round((count/amount),2))
+  dplyr::summarise(count = count, ind_m2 = round((count/amount),2))
 
 raw_cleaned_recruits<-recruit2
 
