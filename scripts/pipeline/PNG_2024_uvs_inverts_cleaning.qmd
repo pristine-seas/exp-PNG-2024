@@ -273,8 +273,7 @@ raw_cleaned_inverts<-invert2
 raw_cleaned_inverts<-left_join(raw_cleaned_inverts, iucn_result, by = c("taxa"="species"))
 raw_cleaned_inverts$taxon_valid_name<-NULL
 
-save(invert_avg_by_site, invert_avg_by_station, resource_invert_densities,invert_taxa_table, raw_cleaned_inverts,  file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/invert/PNG_2024_uvs_invert.RData")
+save(invert_avg_by_site, invert_avg_by_station, resource_invert_avg_by_site,invert_taxa_table, raw_cleaned_inverts,  file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/invert/PNG_2024_uvs_invert.RData")
 
-save(invert_avg_by_site, invert_avg_by_station, resource_invert_densities,invert_taxa_table, raw_cleaned_inverts,  file = "PNG_2024_uvs_invert.RData")
 
 ```
