@@ -255,27 +255,25 @@ invert_taxa_table[is.na(invert_taxa_table) ]<- ""
 invert_avg_by_site <- invert2 %>% 
   filter(transect != "Off") %>%
   group_by(ps_site_id, common_name, taxa) %>%
-  dplyr::summarise(count = sum(count), count_m2 = sum(count)/100)
+  dplyr::summarise(count = sum(count), ind_m2 = sum(count)/100)
 
 
 invert_avg_by_station <- invert2 %>% 
   filter(transect != "Off") %>%
   group_by(ps_station_id, common_name, taxa) %>%
-  dplyr::summarise(count = sum(count), count_m2 = sum(count)/50)
+  dplyr::summarise(count = sum(count), ind_m2 = sum(count)/50)
 
 
 ### Teasing out the more important inverts
 
-resource_invert_densities<-invert_avg_by_site %>%
+resource_invert_avg_by_site<-invert_avg_by_site %>%
   filter(common_name == "Giant clams" | common_name == "Sea cucumber" | common_name == "Trochus")
-
-
 
 raw_cleaned_inverts<-invert2
 raw_cleaned_inverts<-left_join(raw_cleaned_inverts, iucn_result, by = c("taxa"="species"))
 raw_cleaned_inverts$taxon_valid_name<-NULL
 
-# save(invert_avg_by_site, invert_avg_by_station, resource_invert_densities,invert_taxa_table, raw_cleaned_inverts,  file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/invert/PNG_2024_uvs_invert.RData")
+save(invert_avg_by_site, invert_avg_by_station, resource_invert_densities,invert_taxa_table, raw_cleaned_inverts,  file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/invert/PNG_2024_uvs_invert.RData")
 
 save(invert_avg_by_site, invert_avg_by_station, resource_invert_densities,invert_taxa_table, raw_cleaned_inverts,  file = "PNG_2024_uvs_invert.RData")
 
