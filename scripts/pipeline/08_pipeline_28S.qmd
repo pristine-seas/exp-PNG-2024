@@ -1,0 +1,647 @@
+---
+title: "PNG_2024_28S_edna_cleaning"
+execute: 
+  echo: false
+number-sections: true
+author: "Molly Timmers"
+format:
+     html:
+       toc: true
+       self-contained: true
+       toc-location: left
+editor_options: 
+  chunk_output_type: console
+---
+
+# Libraries
+
+```{r}
+rm(list = ls())
+#options(repos="https://cran.rstudio.com" )
+library(tidyverse)
+library(stringi)
+library(stringr)
+library(janitor)
+library(furrr)
+library(worrms)
+library(robis)
+library(rgbif)
+library(EcolUtils)
+library(data.table)
+
+```
+
+# Raw Data
+
+```{r}
+df_28S<-read.csv("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/eDNA/PNG_2024_Leg2_edna_zotu_table_28S.csv")
+
+# Removing all non metazoans and plantae but first need to add a Kingdom to Rhodophyta and Phaeophyceae which I'm calling plants
+
+df_28S$kingdom<-ifelse(df_28S$phylum == "Rhodophyta", "Plantae",df_28S$kingdom)
+
+df_28S$kingdom<-ifelse(df_28S$class == "Phaeophyceae", "Plantae",df_28S$kingdom)
+df_28S$kingdom<-ifelse(df_28S$class == "Ulvophyceae", "Plantae",df_28S$kingdom)
+
+df_28S$phylum<-ifelse(df_28S$class == "Phaeophyceae", "Brown Algae",df_28S$phylum)
+
+df_28S$phylum<-ifelse(df_28S$class == "Ulvophyceae", "Green Algae",df_28S$phylum)
+
+
+### Turning all NA and "dropped" from taxonomic classiciation into blanks across dataframe
+df_28S[df_28S=="dropped"]<-""
+df_28S[is.na(df_28S)]<-""
+
+# Removing all non metazoans, mammal contaminants like "Hominidae", "Bovidae" and removing bait...
+df_28S2<- df_28S %>% filter(! family %in% c("Bovidae","Canidae","Suidae","Felidae","Elephantidae"))  %>%
+filter(! order %in% c("Primates","Lagomorpha","Galliformes")) %>% 
+filter (! class %in% c("Insecta","Arachnida")) %>%
+  filter (! phylum %in% c("Streptophyta")) %>% # removing land plants 
+  filter (! order %in% c("Synechococcales")) %>%
+  filter(phylum != "") %>%
+  filter (kingdom == "Metazoa" | kingdom == "Plantae") 
+  
+
+# Checking what was removed
+removed_28S<-anti_join(df_28S, df_28S2)
+
+df_28S2$domain<-NULL
+  
+
+
+```
+
+#### Cleaning, Checking, and Removing Negatives
+
+```{r}
+
+df_meta<-df_28S2[,1:10]
+neg_28S<-df_28S2[,11:ncol(df_28S2)] 
+rownames(neg_28S)<-df_28S2$OTU
+#Summing up all controls to subtract against data
+Sum_28S <- as.data.frame(neg_28S %>%  select(contains(c("FN","FN","pos","neg", "positive","negative", "POS","NEG","Pos","Neg"))) %>%  rowSums())
+colnames(Sum_28S)<-"discard"
+
+
+# checking the range of these values
+head(Sum_28S[order(Sum_28S$discard, decreasing = TRUE),], 30)
+# isolating the highest ones to see what OTUs they are
+Sum_28S %>%
+  filter(discard == "16") 
+
+head(subset(df_28S2, OTU == "Zotu2"), n=c(1,11))
+t(subset(df_28S2, OTU == "Zotu2"))
+
+
+# substrating the summed negatives and positives from the dataset
+neg_28S <- neg_28S-Sum_28S$discard 
+# Removing any negative values and singletons
+neg_28S[neg_28S<2] <- 0
+
+# Removing all controls                         
+neg_28S<-neg_28S %>% select(-contains(c("EN","FN","pos","neg","Sum","postive","negative", "POS","NEG")))
+# adding back OTU column
+neg_28S$OTU<-rownames(neg_28S)
+# bringing column to front
+neg_28S <- neg_28S %>% select("OTU", everything()) 
+# Summing rows to remove all 0 values
+neg_28S$sum<-rowSums(neg_28S[,2:ncol(neg_28S)])
+# removing rows with 0 values
+neg_28S<-subset(neg_28S, sum > 0)
+neg_28S$sum<-NULL
+
+
+```
+
+#### Evaluating Remaining Sequences
+
+```{r}
+# Examining the sum sequences per replicate 
+
+min(colSums(neg_28S[,2:ncol(neg_28S)]))
+max(colSums(neg_28S[,2:ncol(neg_28S)]))
+
+
+# Checking how many sequences are from each sample....
+neg_28S[,2:ncol(neg_28S)] %>%
+  select(where(is.numeric)) %>% 
+  map_dbl(sum) %>%
+  {names(.)[. <10000]}
+### 49 samples are less than 10,000 sequences....
+
+# Super low, checking original dataframe *** majority of sequences were NOT metazoans...
+df_28S[,12:ncol(df_28S)] %>%
+  select(where(is.numeric)) %>% 
+  map_dbl(sum) %>%
+  {names(.)[. > 50000]}
+
+## Checking differences between
+seqTotalCheck_28S<-as.data.frame(colSums(df_28S2[,11:ncol(df_28S2)]))
+colnames(seqTotalCheck_28S)[1]<-"Total"
+
+```
+
+
+#### Abundance Filtration
+
+```{r}
+
+abun_28S<-as.data.frame(neg_28S[,2:ncol(neg_28S)])
+rownames(abun_28S)<-neg_28S$OTU
+total<-colSums(abun_28S)
+
+
+# converting to relative abundance
+rel_28S <- as.data.frame(abun_28S)
+for (i in 1:ncol(abun_28S))  rel_28S[,i] <- abun_28S[,i]/total[i] 
+# modify the relative abundance value to remove below to be more or less stringent 
+rel_28S2<-as.data.frame(lapply(rel_28S, function(x){replace(x,x <= 0.0001,0)}))
+rel_28S2$OTU<-neg_28S$OTU
+rel_28S2 <- rel_28S2 %>% select("OTU", everything()) 
+rel_28S2[is.na(rel_28S2)]<- 0
+rel_28S2$Reads<-rowSums(rel_28S2[,2:ncol(rel_28S2)])
+rel_28S3<-subset(rel_28S2, Reads != 0)
+rel_28S3$Reads<-NULL
+
+#Back Calculating to whole numbers
+whole_28S<-rel_28S3[,2:ncol(rel_28S3)]
+whole_28S2<-whole_28S
+for (i in 1:ncol(whole_28S))  whole_28S2[,i] <- whole_28S[,i]*total[i] 
+whole_28S2$OTU<-rel_28S3$OTU
+whole_28S2 <- whole_28S2 %>% select("OTU", everything()) 
+whole_28S2$Reads<-rowSums(whole_28S2[,2:ncol(whole_28S2)])
+whole_28S2$Reads<-NULL
+
+```
+
+###### Investigating Abundance Filtration results
+
+```{r}
+##### What am I missing?
+
+# Getting OTUs only from filtration output
+taxaCheck<-as.data.frame(whole_28S2$OTU)
+colnames(taxaCheck)<-"OTU"
+
+# seeing which OTUs are no longer in the original dataframe
+taxaCheck3<-anti_join(df_28S2,taxaCheck, by = "OTU")
+
+# which columns have the removed OTUS
+datacols <- as.data.frame(which(colSums(taxaCheck3[,11:ncol(taxaCheck3)]) > 0))
+datacols2<-rownames(datacols)
+# Only want columns containing the removed OTUs
+taxaCheck4<-subset(taxaCheck3, select=datacols2)
+# Binding the species names to the columns that has the sequences
+taxaCheck5<-cbind(taxaCheck3$species,taxaCheck4)
+colnames(taxaCheck5)[1]<-"removed"
+
+### If you wanna perused a specific species if there are more than one returned from your abundance filtering
+unique(taxaCheck5$removed)
+
+# taxaCheck6<-
+#   filter(taxaCheck5, removed == "Pseudocheilinus hexataenia" )
+
+## This will identify which columns
+# taxaCheck7<-taxaCheck6[, 2:ncol(taxaCheck6)] %>% 
+#   select(where(is.numeric)) %>% 
+#   map_dbl(sum) %>%
+#   {names(.)[. > 0]}
+# # This then provides name of columns and number of sequences 
+# select(taxaCheck6, taxaCheck7)
+
+
+```
+
+#### Collapsing Taxonomic Data
+
+```{r}
+# If choose not to do abundance filtration, then switch whole_df with neg_df
+
+taxcol_28S<-right_join(df_meta,whole_28S2,  by = "OTU")
+
+### What are the pid's across taxa
+#aggregate(zotu ~ pid, data = taxcol_28S, FUN = length)
+
+# Removing all occurrences of "dropped" in dataframe
+taxcol_28S[taxcol_28S=="dropped"] <- ""
+### had to include the below because NA's were screwing up the matching
+taxcol_28S[is.na(taxcol_28S)] <- " "
+
+# Collapsing  taxonomy to species and summarizing the columns - note OTU is REMOVED
+collapse_28S<- taxcol_28S %>% 
+  group_by(kingdom,phylum,class,order,family,genus,species)  %>%
+            summarise_if(is.numeric, sum) 
+
+collapse_28S<-collapse_28S[
+  with(collapse_28S, order(kingdom,phylum,class,order,family,genus,species)),
+]  
+
+# Removing columns with summarized nonense
+collapse_28S$seq_length<-NULL
+collapse_28S$unique_hits<- NULL
+collapse_28S$taxid<- NULL
+collapse_28S$hits<- NULL
+
+# Collapsing by OTU name based on taxonomy which adds all OTUs collapse together into the OTU column for reference
+names_28S<-as.data.frame(aggregate(OTU~kingdom+phylum+class+order+family+genus+species, taxcol_28S, toString))
+
+names_28S<-names_28S[
+  with(names_28S, order(kingdom,phylum,class,order,family,genus,species)),
+] 
+
+# Adding the OTU collapsed name 
+collapse_28S$zotu_All<-names_28S$OTU  
+# Checking if there are any mislinks
+check<-anti_join( collapse_28S,names_28S, by = c("phylum","class","order","family","genus","species"))
+
+# Getting a column of just one OTU name rather than all of them for easier data manipulation for later
+collapse_28S$OTU<-gsub("^(.*?),.*", "\\1", collapse_28S$zotu_All)
+
+# Bringing columns to fron
+collapse_28S <- collapse_28S %>% select(c("zotu_All","OTU"), everything()) 
+
+```
+
+#### Rarfeying
+
+```{r}
+
+# For reports, merging all surface and bottom samples together
+
+replicateMerge_28S<-collapse_28S[,10:ncol(collapse_28S)]
+replicateMerge_28S$OTU<-collapse_28S$OTU
+
+replicateMerge_28S2<- replicateMerge_28S %>% pivot_longer(cols = -OTU, names_to = "Sample", values_to = "Sequence")
+
+replicateMerge_28S2$Site<-sub("_[^_]+$", "",replicateMerge_28S2$Sample)
+replicateMerge_28S2$Site<-sub("_[^_]+$", "",replicateMerge_28S2$Site)
+replicateMerge_28S2$Site<-sub("_[^_]+$", "",replicateMerge_28S2$Site)
+
+# Converting data  back wide to merge back the taxon data
+
+replicateMerge_28S3<-pivot_wider(replicateMerge_28S2, id_cols = c(OTU),names_from = Site, values_from = Sequence, values_fn = sum)
+
+sort(colSums(replicateMerge_28S3[,2:ncol(replicateMerge_28S3)]), decreasing = T)
+
+### Rarefying Data
+
+subsample_28S<-as.data.frame(t(replicateMerge_28S3[,2:ncol(replicateMerge_28S3)]))
+colnames(subsample_28S)<-replicateMerge_28S3$OTU
+sort(rowSums(subsample_28S))
+
+subsample_28S1<-rrarefy.perm(subsample_28S,min(rowSums(subsample_28S)), n= 100, round.out = T)
+subsample_28S1<-as.data.table(subsample_28S1)
+subsample_28S2<-subsample_28S1[,colSums(subsample_28S1 != 0) > 0, with = F]
+rowSums(subsample_28S2)
+rownames(subsample_28S2)<-rownames(subsample_28S)
+
+# Adding some metadata to the file
+replicateMerge_28S_rare<-as.data.frame(t(subsample_28S2))
+colnames(replicateMerge_28S_rare)<-rownames(subsample_28S2)
+replicateMerge_28S_rare$OTU<-rownames(replicateMerge_28S_rare)
+
+# Merging back metadata
+merged_28S<-right_join(collapse_28S[,1:9], replicateMerge_28S_rare, by = "OTU")
+
+
+```
+
+# Updating Taxonomy via Worms
+
+```{r}
+
+# Adding a taxon column so that worms can run through everything
+ merged_28S$taxa<-merged_28S$species
+ merged_28S <- merged_28S %>% select("taxa", everything()) 
+ merged_28S$taxa<-ifelse(merged_28S$species == "", merged_28S$genus, merged_28S$taxa)
+ merged_28S$taxa<-ifelse(merged_28S$species == "" & merged_28S$genus == "", merged_28S$family,merged_28S$taxa)
+ merged_28S$taxa<-ifelse(merged_28S$taxa == "", merged_28S$order, merged_28S$taxa)
+
+cleanTaxa<-distinct(merged_28S[,c("taxa","OTU")])
+
+taxonomy_worms <- cleanTaxa$taxa %>% 
+  split(ceiling(seq_along(cleanTaxa$taxa)/20)) %>% 
+  furrr::future_map_dfr(worrms::wm_records_names) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(scientificname)) %>% 
+  mutate(rank = str_to_lower(rank),
+         taxon_id = if_else(!is.na(valid_aphia_id),
+                            paste0("WORMS:", valid_aphia_id),                        NA_character_)) %>% 
+  select(taxa = scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, taxon_authority = valid_authority, kingdom, phylum, class, order, family, genus) %>% 
+  distinct()
+
+## Checking name issues
+bad_names<-anti_join(unique(merged_28S[,c("taxa")]), taxonomy_worms[,c("taxon_valid_name")], by = c("taxa" ="taxon_valid_name"))
+sort(bad_names$taxa)
+
+### A bunch of these are not marine and or have the kooky dna names..
+
+# what are the duplicates
+duped_taxa_worms <- taxonomy_worms %>% 
+  janitor::get_dupes(taxa) 
+
+deduped_taxa_worms <- duped_taxa_worms %>% 
+  filter(status %in% c("accepted")) %>% 
+  select(-dupe_count)
+
+taxonomy_worms <- taxonomy_worms %>% 
+  group_by(taxa) %>% 
+  filter(n() <= 1) %>% # remove duplicates
+  bind_rows(deduped_taxa_worms) # add deduped
+
+setdiff(taxonomy_worms$taxon_valid_name,taxonomy_worms$taxa)
+
+
+### need to rerun.....
+
+
+```
+
+#### Taxonomy one more time....
+
+```{r}
+
+taxonomy_worms<-as.data.frame(taxonomy_worms[,c("taxa","taxon_valid_name")])
+tax_2<-left_join(merged_28S, taxonomy_worms, by = "taxa")
+tax_2<-tax_2 %>% select(c("taxon_valid_name"), everything()) 
+# Removing species column and changing taxaon_valid_name column as species. Now going back and rerunning Worms to populate the correct genus, family etc., for all of the new names
+tax_2$taxa<-NULL
+colnames(tax_2)[1]<-"taxa"
+setdiff(taxonomy_worms$taxon_valid_name,taxonomy_worms$taxa)
+
+cleanTaxa_take2<-distinct(tax_2[,c("taxa","OTU")])
+
+taxonomy_worms_take2 <- cleanTaxa_take2$taxa %>% 
+  split(ceiling(seq_along(cleanTaxa_take2$taxa)/20)) %>% 
+  furrr::future_map_dfr(worrms::wm_records_names) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(scientificname)) %>% 
+  mutate(rank = str_to_lower(rank),
+         taxon_id = if_else(!is.na(valid_aphia_id),
+                            paste0("WORMS:", valid_aphia_id),                        NA_character_)) %>% 
+  select(taxa = scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, taxon_authority = valid_authority, kingdom, phylum, class, order, family, genus) %>% 
+  distinct()
+
+
+## Checking name issues
+bad_names<-anti_join(unique(tax_2[,c("taxa")]), taxonomy_worms_take2[,c("taxon_valid_name")], by = c("taxa" ="taxon_valid_name"))
+sort(bad_names$taxa)
+
+# what are the duplicates
+duped_taxa_worms <- taxonomy_worms_take2 %>% 
+  janitor::get_dupes(taxa) 
+
+deduped_taxa_worms <- duped_taxa_worms %>% 
+  filter(status %in% c("accepted")) %>% 
+  select(-dupe_count)
+
+## Now the taxonomy is right
+taxonomy_worms_take2 <- taxonomy_worms_take2 %>% 
+  group_by(taxa) %>% 
+  filter(n() <= 1) %>% # remove duplicates
+  bind_rows(deduped_taxa_worms) # add deduped
+
+setdiff(taxonomy_worms_take2$taxon_valid_name,taxonomy_worms_take2$taxa)
+
+cleanTaxa_take3<-left_join(cleanTaxa_take2, taxonomy_worms_take2, by = "taxa")
+cleanTaxa_take3$species<-str_count(cleanTaxa_take3$taxon_valid_name, " ") > 0
+cleanTaxa_take3$species<-ifelse(cleanTaxa_take3$species == T,cleanTaxa_take3$taxon_valid_name,"" )
+
+cleanTaxa_take3<-cleanTaxa_take3[,c("OTU","phylum","class","order","family","genus","species","taxa")]
+
+# Grabbing the NA's because they represent non-marine animals and the DNA barcode species names entries from genebank
+remaining_taxa<-cleanTaxa_take3%>%
+  filter(is.na(phylum))
+remaining_taxa<-left_join(remaining_taxa[,"OTU"], merged_28S[,1:10], by = "OTU")
+remaining_taxa$zotu_All<-NULL
+remaining_taxa$kingdom<-NULL
+remaining_taxa<-remaining_taxa[names(cleanTaxa_take3)]
+remaining_taxa$class<-ifelse(remaining_taxa$class == "Actinopteri", "Teleostei", remaining_taxa$class)
+
+#Removing the NA to rbind
+cleanTaxa_take3<-subset(cleanTaxa_take3, !is.na(phylum))
+cleanTaxa_take4<-rbind(cleanTaxa_take3,remaining_taxa)
+
+#Getting just the sequence data to merge back
+remove_col<-c("phylum","class","order","family","genus","species","taxa")
+sequence_data<-merged_28S
+sequence_data[remove_col]<-NULL
+
+cleaned_data<-left_join(cleanTaxa_take4, sequence_data, by = "OTU")
+
+```
+
+
+#### Adding Common Names - Target Taxa
+
+```{r}
+
+
+cleaned_data <- cleaned_data %>%
+    mutate(., common_name = with(., case_when(
+        (genus == "Tridacna" | genus == "Hippopus") ~ "Giant clams",
+        (genus == "Pinctada") ~ "Pearl oyster" ,
+        (genus == "Trochus") ~ "Trochus" ,
+        (family == "Plakobranchidae" | family == "Volvatellidae") ~ "Sea slugs",
+        (family == "Diogenidae" | family == "Paguridae") ~"Hermit crab",
+        (family == "Tetraliidae" | family == "Trapeziidae") ~ "Coral crab",
+        (family == "Alpheidae" | family == "Palaemonidae"| family == "Stenopodidae") ~ "Shrimp",
+        (family == "Palinuridae" | family == "Scyllaridae") ~ "Lobster",
+        (family == "Agalmatidae" | family == "Athorybiidae" | family == "Prayidae" | family == "Forskaliidae" | family == "Diphyidae") ~ "Siphonophore",
+       (order == "Antipatharia") ~ "Black coral",
+        (order == "Zoantharia") ~ "Zoanthid",
+        (order == "Euphausiacea")~ "Krill",
+        (order == "Amphipoda")~ "Amphipods",
+        (order == "Salpida")~ "Salps",
+        (order == "Octopoda")~ "Octopus",
+        (order == "Actiniaria") ~ "Sea anenome",
+        (order == "Stomatopoda") ~ "Stomatopod",
+        (order == "Aplysiida" | order == "Cephalaspidea" | order == "Nudibranchia" | order == "Pleurobranchida") ~ "Sea slugs",
+        (order == "Scleractinia") ~ "Hard coral",
+        (class == "Copepoda") ~"Copepods",
+        (class == "Hexanauplia") ~"Copepods",
+        (class == "Thecostraca") ~ "Barnacle",
+        (class == "Holothuroidea") ~ "Sea cucumber",
+        (class == "Appendicularia") ~"Larvacean",
+        (class == "Asteroidea") ~ "Sea stars",
+        (class == "Octocorallia") ~"Soft corals",
+        (class == "Gastropoda") ~ "Snails",
+        (class == "Florideophyceae") ~ "Red algae",
+        (class == "Phaeophyceae") ~ "Brown algae",
+        (class == "Echinoidea") ~ "Sea urchin",
+        (class == "Ophiuroidea") ~ "Brittle stars",
+        (class == "Palaeonemertea") ~ "Ribbon worms",
+        (class == "Scyphozoa") ~ "Jellyfish",
+        (class == "Hydrozoa") ~ "Hydroids",
+        (class == "Ascidiacea") ~ "Tunciate",
+        (class == "Crinoidea") ~  "Crinoid",
+        (class == "Polyplacophora") ~  "Chiton",
+        (class == "Cubozoa") ~ "Box jelly",
+        (class == "Bivalvia") ~ "Bivalves",
+        (phylum == "Annelida") ~ 'Worms',
+        (phylum == "Porifera") ~ 'Sponges',
+        (phylum == "Nematoda") ~ 'Nematodes',
+        (phylum == "Nemertea") ~ 'Ribbon worms',
+        (phylum == "Bryozoa") ~ 'Bryozoans',
+        (phylum == "Platyhelminthes") ~ "Flat worm",
+        (phylum == "Chaetognatha") ~ 'ArrowWorms',
+        (phylum == "Porifera") ~ 'Sponges',
+        (phylum == "Entoprocta") ~ 'Goblet worms',
+        (phylum == "Chlorophyta") ~ "Green algae")))
+
+
+cleaned_data <- cleaned_data %>% select("common_name", everything()) 
+
+
+```
+
+#### Adding Motile or Sessile Invert
+
+```{r}
+
+
+cleaned_data <- cleaned_data %>%
+    mutate(., type = with(., case_when(
+        (common_name %in% c("Cnidaria","Sponges" ,"Hydroids", "Tunicate", "Bryozoans","Goblet worms")) ~ "Sessile",
+      (class %in% c("Ascidiacea", "Anthozoa", "Thecostraca" ,"Bivalvia","Hexacorallia","Octocorallia",  "Entoprocta")) ~ "Sessile",
+      	(order %in% c("Sabellida","Terebellida")) ~ "Sessile",
+      (family %in% c( "Ampharetidae" , "Chaetopteridae", "Fauveliopsidae","Maldanidae" ,"Oweniidae", "Sabellidae", "Scalibregmatidae", "Serpulidae" , "Spionidae" ,"Terebellidae" ,"Vermetidae" )) ~ "Sessile",
+      (kingdom == "Plantae") ~ "Sessile")))
+cleaned_data$type<-ifelse(is.na(cleaned_data$type), "Motile", cleaned_data$type)
+cleaned_data <- cleaned_data %>% select("type", everything()) 
+
+```
+
+
+# Adding IUCN
+
+```{r}
+# The functions are super picky....need to get a list of species and not blanks or NA can be in that list
+# Sorting the species
+spp_check<- sort(unique(cleaned_data$species)[-which(unique(cleaned_data$species) %in% c(NA,""))])
+
+
+# this function is grabbing the lists within lists of the crazy annoting IUCN data and needs to be within the loop. Unfortunately, if the species is not known or hasn't been reviewed for IUCN, the function iucn_status which you use after you create a list of list from your species using iucn_summary from taxize won't work because there's an NA. It's irritable. Anyway, this was the only work aronud I could make work.
+
+get_elements <- function(x, element) {
+  if(is.list(x))
+  {
+    if(element %in% names(x)) x[[element]]
+    else lapply(x, get_elements, element = element)
+  }
+}
+
+share_list = list()
+for ( i in 1:length(spp_check)){
+  # grabbing the iucn_summary data for each species individually 
+    # even if it's NA, it will save into the sharelist
+  check<-iucn_summary(spp_check[i]) 
+ x<- get_elements(check, "red_list_category")
+ y<-unlist(get_elements(x, "code"))
+   share_list[i]<-do.call(rbind, lapply(y, data.frame))
+}
+# now have to convert the NA to a value cause otherwise when you unlist, it removes all the NA preventing you from merging back to the dataframe
+is.na(share_list) <- lengths(share_list) == 0
+# unlisting the list to a dataframe
+iucn_result<-as.data.frame(unlist(share_list))
+# creating a column name to then merge
+colnames(iucn_result)<-"iucn_status"
+# May need to add a row to the end because the last row was an NA and not added to the list in the loop
+iucn_result[nrow(iucn_result)+1,] <-NA
+# adding the species data back
+iucn_result$species<-spp_check
+
+# merging to dataframe
+cleaned_data<-left_join(cleaned_data, iucn_result, by = "species")
+# replacing NA with 0
+cleaned_data[is.na(cleaned_data) ]<- ""
+
+cleaned_data<-cleaned_data %>% select(c("iucn_status"), everything()) 
+
+
+
+```
+
+
+## Country Records
+
+#### GBIF - include IUCN
+
+Get EEZ zone \@ <https://www.marineregions.org/eezsearch.php>
+
+```{r}
+
+
+gbif<-occ_data(geometry = c(139.1, -14.85, 162.83,  2.1))
+
+gbif2<-gbif$data
+
+gbif3<-distinct(gbif2[,c("species")])
+colnames(gbif3)[1]<-"scientificName"
+
+
+```
+
+#### OBIS
+
+```{r}
+
+obis<-occurrence(geometry = "POLYGON ((139.1 -14.85, 139.1 2.1, 162.83 2.1, 162.83 -14.85))", wrims = TRUE, exclude = "ON_LAND")
+
+obis2<-distinct(obis[,c("scientificName")])
+
+Check<-checklist(geometry = "POLYGON ((139.1 -14.85, 139.1 2.1, 162.83 2.1, 162.83 -14.85))")
+Check2<-subset(Check, taxonRank == "Species")
+Check3<-Check2[,c("acceptedNameUsage")]
+colnames(Check3)[1]<-"scientificName"
+
+obis_all<-distinct(rbind(obis2, Check3))
+
+```
+
+#### Database pooling GBIF, and OBIS
+
+```{r}
+
+# Merge all together and then see....
+All_ids<-distinct(rbind(obis_all,gbif3))
+All_ids$PNG<-"Yes"
+
+# How many of these are listed in the database?
+cleaned_data<-left_join(cleaned_data, All_ids, by = c("species"="scientificName"))
+cleaned_data$PNG<-ifelse(is.na(cleaned_data$PNG),"No",cleaned_data$PNG)
+cleaned_data<-cleaned_data %>% select(c("PNG"), everything()) 
+
+
+### Need to get sequence data to attach to this output.
+
+### Creating a sequence file in case you want to use for phylotree
+# sequences_for_fasta<-as.data.frame(left_join(cleaned_data[,c("OTU","taxa")], df_28S[,c("OTU","sequence")], by = "OTU"))
+# sequences_for_fasta$taxa<-NULL
+# colnames(sequences_for_fasta)<-c("names","sequences")
+
+# Just the taxonomy
+taxa_table<-cleaned_data[,c("OTU","common_name","phylum","class","order","family","genus","species","taxa")]
+
+# All samples metdata
+sample_metadata_data_table<-cleaned_data[,c("OTU", "taxa","iucn_status", "PNG")]
+
+### Just the OTU table
+otu_col<-grepl("PNG",names(cleaned_data))
+otu_table<-cleaned_data[,otu_col]
+otu_table$OTU<-cleaned_data$OTU
+otu_table <- otu_table %>% select("OTU", everything()) 
+otu_table$PNG<-NULL
+
+#### Everything together
+taxa_and_sample_metadata_by_site<-cleaned_data
+
+#save(taxa_and_metadata_by_site, otu_table, sample_metadata_data_table,taxa_table, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_edna_28S.RData")
+
+
+
+#write.csv(cleaned_data,"~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_Leg2_taxa_by_site_28S.csv", row.names = F)
+
+```
+
+

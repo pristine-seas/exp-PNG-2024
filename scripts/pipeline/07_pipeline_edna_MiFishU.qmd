@@ -1,0 +1,784 @@
+---
+title: "PNG_2024_Leg1_MiFishE_edna_cleaning"
+execute: 
+  echo: false
+number-sections: true
+author: "Molly Timmers"
+format:
+     html:
+       toc: true
+       self-contained: true
+       toc-location: left
+editor_options: 
+  chunk_output_type: console
+---
+
+# Libraries
+
+```{r}
+rm(list = ls())
+#options(repos="https://cran.rstudio.com" )
+library(tidyverse)
+library(stringi)
+library(stringr)
+library(worrms)
+library(robis)
+library(rgbif)
+library(EcolUtils)
+library(data.table)
+library(rfishbase)
+library(plyr)
+library(dplyr)
+library(readxl)
+library(rredlist)
+library(taxize)
+#install_version("rfishbase", version = "4.1.1", repos = "http://cran.us.r-project.org")
+
+```
+
+# Raw Data
+
+```{r}
+df_mifish<-read.csv("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/eDNA/PNG_2024_Leg2_edna_zotu_table_MiFishU.csv")
+
+### Turning all NA and "dropped" from taxonomic classiciation into blanks across dataframe
+df_mifish[df_mifish=="dropped"]<-""
+df_mifish[is.na(df_mifish)]<-""
+
+# Removing all non metazoans, mammal contaminants like "Hominidae", "Bovidae" and removing bait...
+df_mifish2<- df_mifish %>% filter(! family %in% c("Bovidae","Canidae","Suidae","Felidae","Elephantidae","Phasianidae"))  %>%
+filter(! order %in% c("Primates","Lagomorph","Squamata")) %>% 
+filter (! class %in% c("Insecta","Arachnida")) %>% 
+  filter (! phylum == "") %>%
+  filter (kingdom == "Metazoa") %>%
+### Also, any sequence only identified to phylum is out. This shouldn't be the case with vertebrates.
+  filter(order != "" | family != "")
+
+# Checking what was removed
+mifish_remove<-anti_join(df_mifish, df_mifish2)
+
+
+# Adding class to sea turtles
+df_mifish2$class<-ifelse(df_mifish2$order == "Testudines", "Reptilia", df_mifish2$class)
+
+# No need for domain
+df_mifish2$domain<-NULL
+
+
+
+```
+
+#### Cleaning, Checking, and Removing Negatives
+
+```{r}
+
+df_meta<-df_mifish2[,1:10]
+neg_mifish<-df_mifish2[,11:ncol(df_mifish2)] 
+rownames(neg_mifish)<-df_mifish2$OTU
+#Summing up all controls to subtract against data
+Sum_mifish <- as.data.frame(neg_mifish %>%  select(contains(c("FN","EN","pos","neg", "positive","negative", "POS","NEG","Pos","Neg"))) %>%  rowSums())
+colnames(Sum_mifish)<-"discard"
+
+
+# checking the range of these values
+head(Sum_mifish[order(Sum_mifish$discard, decreasing = TRUE),], 30)
+# isolating the highest ones to see what OTUs they are
+Sum_mifish %>%
+  filter(discard == "45") 
+
+head(subset(df_mifish2, OTU == "Zotu3"), n=c(1,11))
+t(subset(df_mifish2, OTU == "Zotu3"))
+
+
+# substrating the summed negatives and positives from the dataset
+neg_mifish <- neg_mifish-Sum_mifish$discard 
+# Removing any negative values and singletons
+neg_mifish[neg_mifish<2] <- 0
+
+# Removing all controls                         
+neg_mifish<-neg_mifish %>% select(-contains(c("EN","FN","pos","neg","Sum","postive","negative", "POS","NEG", "Pos","Neg")))
+# adding back OTU column
+neg_mifish$OTU<-rownames(neg_mifish)
+# bringing column to front
+neg_mifish <- neg_mifish %>% select("OTU", everything()) 
+# Summing rows to remove all 0 values
+neg_mifish$sum<-rowSums(neg_mifish[,2:ncol(neg_mifish)])
+# removing rows with 0 values
+neg_mifish<-subset(neg_mifish, sum > 0)
+neg_mifish$sum<-NULL
+
+
+```
+
+#### Evaluating Remaining Sequences
+
+```{r}
+# Examining the sum sequences per replicate 
+
+min(colSums(neg_mifish[,2:ncol(neg_mifish)]))
+max(colSums(neg_mifish[,2:ncol(neg_mifish)]))
+
+
+# Checking how many sequences are from each sample....
+neg_mifish[,2:ncol(neg_mifish)] %>%
+  select(where(is.numeric)) %>% 
+  map_dbl(sum) %>%
+  {names(.)[. <10000]}
+### 49 samples are less than 10,000 sequences....
+
+# Super low, checking original dataframe *** majority of sequences were NOT metazoans...
+df_mifish[,12:ncol(df_mifish)] %>%
+  select(where(is.numeric)) %>% 
+  map_dbl(sum) %>%
+  {names(.)[. > 25000]}
+
+## Checking differences between
+seqTotalCheck_mifish<-as.data.frame(colSums(df_mifish[,15:ncol(df_mifish)]))
+colnames(seqTotalCheck_mifish)[1]<-"Total"
+seqTotalCheck_mifish$MetaPlanOnly<-colSums(df_mifish[,15:ncol(df_mifish)])
+seqTotalCheck_mifish$KeepPerc<-(seqTotalCheck_mifish$MetaPlanOnly/seqTotalCheck_mifish$Total) * 100
+seqTotalCheck_mifish$EukBactProt<-100-seqTotalCheck_mifish$KeepPerc
+
+mean(seqTotalCheck_mifish$KeepPerc)
+mean(seqTotalCheck_mifish$EukBactProt)
+
+
+```
+
+#### Abundance Filtration
+
+```{r}
+
+abun_mifish<-as.data.frame(neg_mifish[,2:ncol(neg_mifish)])
+rownames(abun_mifish)<-neg_mifish$OTU
+total<-colSums(abun_mifish)
+
+
+# converting to relative abundance
+# Going with 0.05 filtration because it removed the endemic hawaiian fish that's most likely a result of contamination
+
+rel_mifish <- as.data.frame(abun_mifish)
+for (i in 1:ncol(abun_mifish))  rel_mifish[,i] <- abun_mifish[,i]/total[i] 
+# modify the relative abundance value to remove below to be more or less stringent 
+rel_mifish2<-as.data.frame(lapply(rel_mifish, function(x){replace(x,x <= 0.0001,0)}))
+rel_mifish2$OTU<-neg_mifish$OTU
+rel_mifish2 <- rel_mifish2 %>% select("OTU", everything()) 
+rel_mifish2[is.na(rel_mifish2)]<- 0
+rel_mifish2$Reads<-rowSums(rel_mifish2[,2:ncol(rel_mifish2)])
+rel_mifish3<-subset(rel_mifish2, Reads != 0)
+rel_mifish3$Reads<-NULL
+
+#Back Calculating to whole numbers
+whole_mifish<-rel_mifish3[,2:ncol(rel_mifish3)]
+whole_mifish2<-whole_mifish
+for (i in 1:ncol(whole_mifish))  whole_mifish2[,i] <- whole_mifish[,i]*total[i] 
+whole_mifish2$OTU<-rel_mifish3$OTU
+whole_mifish2 <- whole_mifish2 %>% select("OTU", everything()) 
+
+```
+
+###### Investigating Abundance Filtration results
+
+```{r}
+##### What am I missing?
+
+# Getting OTUs only from filtration output
+taxaCheck<-as.data.frame(whole_mifish2$OTU)
+colnames(taxaCheck)<-"OTU"
+
+# adding taxa metadata back to original filtration input dataframe 
+taxaCheck2<-right_join(df_meta,neg_mifish,  by = "OTU")
+# seeing which OTUs are no longer in the original dataframe
+taxaCheck3<-anti_join(taxaCheck2,taxaCheck, by = "OTU")
+
+# which columns have the removed OTUS
+datacols <- as.data.frame(which(colSums(taxaCheck3[,14:ncol(taxaCheck3)]) > 0))
+datacols2<-rownames(datacols)
+# Only want columns containing the removed OTUs
+taxaCheck4<-subset(taxaCheck3, select=datacols2)
+# Binding the species names to the columns that has the sequences
+taxaCheck5<-cbind(taxaCheck3$species,taxaCheck4)
+colnames(taxaCheck5)[1]<-"removed"
+
+### If you wanna perused a specific species if there are more than one returned from your abundance filtering
+sort(unique(taxaCheck5$removed))
+
+# Getting unique names and merging it with metadata to see get more taxonomic information
+removed_species_names<-unique(taxaCheck5$removed) %>%
+  as.data.frame() %>%
+  setNames("species") %>%
+  filter(species != "dropped")
+
+removed_species_names2<-left_join(removed_species_names, df_meta, by =  "species")
+
+
+# Checking which columns
+# taxaCheck6<-
+#  filter(taxaCheck5, removed == "Tursiops aduncus" )
+
+## This will identify which columns
+ # taxaCheck7<-taxaCheck6[, 2:ncol(taxaCheck6)] %>% 
+ #   select(where(is.numeric)) %>% 
+ #  map_dbl(sum) %>%
+ #  {names(.)[. > 0]}
+# # This then provides name of columns and number of sequences 
+ # select(taxaCheck6, taxaCheck7)
+
+
+```
+
+
+#### Collapsing Taxonomic Data
+
+```{r}
+# If choose not to do abundance filtration, then switch whole_df with neg_df
+
+taxcol_mifish<-right_join(df_meta,whole_mifish2,  by = "OTU")
+
+### What are the pid's across taxa
+#aggregate(zotu ~ pid, data = taxcol_mifish, FUN = length)
+
+# Removing all occurrences of "dropped" in dataframe
+taxcol_mifish[taxcol_mifish=="dropped"] <- ""
+### had to include the below because NA's were screwing up the matching
+taxcol_mifish[is.na(taxcol_mifish)] <- " "
+
+# Collapsing  taxonomy to species and summarizing the columns - note OTU is REMOVED
+collapse_mifish<- taxcol_mifish %>% 
+  group_by(kingdom,phylum,class,order,family,genus,species)  %>%
+            summarise_if(is.numeric, sum) 
+
+collapse_mifish<-collapse_mifish[
+  with(collapse_mifish, order(kingdom,phylum,class,order,family,genus,species)),
+]  
+
+# Removing columns with summarized nonense
+collapse_mifish$seq_length<-NULL
+collapse_mifish$unique_hits<- NULL
+collapse_mifish$taxid<- NULL
+collapse_mifish$hits<- NULL
+
+# Collapsing by OTU name based on taxonomy which adds all OTUs collapse together into the OTU column for reference
+names_mifish<-as.data.frame(aggregate(OTU~kingdom+phylum+class+order+family+genus+species, taxcol_mifish, toString))
+
+names_mifish<-names_mifish[
+  with(names_mifish, order(kingdom,phylum,class,order,family,genus,species)),
+] 
+
+# Adding the OTU collapsed name 
+collapse_mifish$zotu_All<-names_mifish$OTU  
+# Checking if there are any mislinks
+check<-anti_join( collapse_mifish,names_mifish, by = c("phylum","class","order","family","genus","species"))
+
+# Getting a column of just one OTU name rather than all of them for easier data manipulation for later
+collapse_mifish$OTU<-gsub("^(.*?),.*", "\\1", collapse_mifish$zotu_All)
+
+# Bringing columns to from
+collapse_mifish <- collapse_mifish %>% select(c("zotu_All","OTU"), everything()) 
+
+# Removing any OTU that has no order or family, it's a vertebrate marker so should have either or
+collapse_mifish<- collapse_mifish %>% filter(!family == "" | !order == "") 
+
+```
+
+#### Rarfeying
+
+```{r}
+
+# For reports, merging all surface and bottom samples together
+
+replicateMerge_mifish<-collapse_mifish[,10:ncol(collapse_mifish)]
+replicateMerge_mifish$OTU<-collapse_mifish$OTU
+
+replicateMerge_mifish2<- replicateMerge_mifish %>% pivot_longer(cols = -OTU, names_to = "Sample", values_to = "Sequence")
+
+replicateMerge_mifish2$Site<-sub("_[^_]+$", "",replicateMerge_mifish2$Sample)
+replicateMerge_mifish2$Site<-sub("_[^_]+$", "",replicateMerge_mifish2$Site)
+replicateMerge_mifish2$Site<-sub("_[^_]+$", "",replicateMerge_mifish2$Site)
+
+# Converting data  back wide to merge back the taxon data
+
+replicateMerge_mifish3<-pivot_wider(replicateMerge_mifish2, id_cols = c(OTU),names_from = Site, values_from = Sequence, values_fn = sum)
+
+sort(colSums(replicateMerge_mifish3[,2:ncol(replicateMerge_mifish3)]), decreasing = T)
+
+### Rarefying Data
+
+subsample_mifish<-as.data.frame(t(replicateMerge_mifish3[,2:ncol(replicateMerge_mifish3)]))
+colnames(subsample_mifish)<-replicateMerge_mifish3$OTU
+sort(rowSums(subsample_mifish))
+
+subsample_mifish1<-rrarefy.perm(subsample_mifish,min(rowSums(subsample_mifish)), n= 100, round.out = T)
+subsample_mifish1<-as.data.table(subsample_mifish1)
+subsample_mifish2<-subsample_mifish1[,colSums(subsample_mifish1 != 0) > 0, with = F]
+rowSums(subsample_mifish2)
+rownames(subsample_mifish2)<-rownames(subsample_mifish)
+
+# Adding some metadata to the file
+replicateMerge_mifish_rare<-as.data.frame(t(subsample_mifish2))
+colnames(replicateMerge_mifish_rare)<-rownames(subsample_mifish2)
+replicateMerge_mifish_rare$OTU<-rownames(replicateMerge_mifish_rare)
+
+# Merging back metadata
+merged_mifish<-right_join(collapse_mifish[,1:9], replicateMerge_mifish_rare, by = "OTU")
+merged_mifish$kingdom<-NULL
+
+```
+
+# Updating Taxonomy via Worms
+Have to do this twice. The first time if identifies the mismatches. Then swap those out in the call and rerun so that all of the remaining classifications match.
+
+```{r}
+
+# Adding a taxon column so that worms can run through everything
+ merged_mifish$taxa<-merged_mifish$species
+ merged_mifish <- merged_mifish %>% select("taxa", everything()) 
+ merged_mifish$taxa<-ifelse(merged_mifish$species == "", merged_mifish$genus, merged_mifish$taxa)
+ merged_mifish$taxa<-ifelse(merged_mifish$species == "" & merged_mifish$genus == "", merged_mifish$family,merged_mifish$taxa)
+ merged_mifish$taxa<-ifelse(merged_mifish$taxa == "", merged_mifish$order, merged_mifish$taxa)
+
+cleanTaxa<-distinct(merged_mifish[,c("taxa","OTU")])
+
+taxonomy_worms <- cleanTaxa$taxa %>% 
+  split(ceiling(seq_along(cleanTaxa$taxa)/20)) %>% 
+  furrr::future_map_dfr(worrms::wm_records_names) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(scientificname)) %>% 
+  mutate(rank = str_to_lower(rank),
+         taxon_id = if_else(!is.na(valid_aphia_id),
+                            paste0("WORMS:", valid_aphia_id),                        NA_character_)) %>% 
+  select(taxa = scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, taxon_authority = valid_authority, kingdom, phylum, class, order, family, genus) %>% 
+  distinct()
+
+## Checking name issues
+bad_names<-anti_join(unique(merged_mifish[,c("taxa")]), taxonomy_worms[,c("taxon_valid_name")], by = c("taxa" ="taxon_valid_name"))
+sort(bad_names$taxa)
+
+### A bunch of these are not marine and or have the kooky dna names..
+
+# what are the duplicates
+duped_taxa_worms <- taxonomy_worms %>% 
+  janitor::get_dupes(taxa) 
+
+deduped_taxa_worms <- duped_taxa_worms %>% 
+  filter(status %in% c("accepted")) %>% 
+  select(-dupe_count)
+
+taxonomy_worms <- taxonomy_worms %>% 
+  group_by(taxa) %>% 
+  filter(n() <= 1) %>% # remove duplicates
+  bind_rows(deduped_taxa_worms) # add deduped
+
+setdiff(taxonomy_worms$taxon_valid_name,taxonomy_worms$taxa)
+
+
+### need to rerun.....
+
+
+```
+
+#### Taxonomy one more time....
+
+```{r}
+
+taxonomy_worms<-as.data.frame(taxonomy_worms[,c("taxa","taxon_valid_name")])
+tax_2<-left_join(merged_mifish, taxonomy_worms, by = "taxa")
+tax_2<-tax_2 %>% select(c("taxon_valid_name"), everything()) 
+# Removing species column and changing taxaon_valid_name column as species. Now going back and rerunning Worms to populate the correct genus, family etc., for all of the new names
+tax_2$taxa<-NULL
+colnames(tax_2)[1]<-"taxa"
+setdiff(taxonomy_worms$taxon_valid_name,taxonomy_worms$taxa)
+
+cleanTaxa_take2<-distinct(tax_2[,c("taxa","OTU")])
+
+taxonomy_worms_take2 <- cleanTaxa_take2$taxa %>% 
+  split(ceiling(seq_along(cleanTaxa_take2$taxa)/20)) %>% 
+  furrr::future_map_dfr(worrms::wm_records_names) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(scientificname)) %>% 
+  mutate(rank = str_to_lower(rank),
+         taxon_id = if_else(!is.na(valid_aphia_id),
+                            paste0("WORMS:", valid_aphia_id),                        NA_character_)) %>% 
+  select(taxa = scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, taxon_authority = valid_authority, kingdom, phylum, class, order, family, genus) %>% 
+  distinct()
+
+
+## Checking name issues
+bad_names<-anti_join(unique(tax_2[,c("taxa")]), taxonomy_worms_take2[,c("taxon_valid_name")], by = c("taxa" ="taxon_valid_name"))
+sort(bad_names$taxa)
+
+# what are the duplicates
+duped_taxa_worms <- taxonomy_worms_take2 %>% 
+  janitor::get_dupes(taxa) 
+
+deduped_taxa_worms <- duped_taxa_worms %>% 
+  filter(status %in% c("accepted")) %>% 
+  select(-dupe_count)
+
+## Now the taxonomy is right
+taxonomy_worms_take2 <- taxonomy_worms_take2 %>% 
+  group_by(taxa) %>% 
+  filter(n() <= 1) %>% # remove duplicates
+  bind_rows(deduped_taxa_worms) # add deduped
+
+setdiff(taxonomy_worms_take2$taxon_valid_name,taxonomy_worms_take2$taxa)
+
+cleanTaxa_take3<-left_join(cleanTaxa_take2, taxonomy_worms_take2, by = "taxa")
+cleanTaxa_take3$species<-str_count(cleanTaxa_take3$taxon_valid_name, " ") > 0
+cleanTaxa_take3$species<-ifelse(cleanTaxa_take3$species == T,cleanTaxa_take3$taxon_valid_name,"" )
+
+cleanTaxa_take3<-cleanTaxa_take3[,c("OTU","phylum","class","order","family","genus","species","taxa")]
+
+# Grabbing the NA's because they represent non-marine animals and the DNA barcode species names entries from genebank
+remaining_taxa<-cleanTaxa_take3%>%
+  filter(is.na(phylum))
+remaining_taxa<-left_join(remaining_taxa[,"OTU"], merged_mifish[,1:10], by = "OTU")
+remaining_taxa$zotu_All<-NULL
+remaining_taxa$kingdom<-NULL
+remaining_taxa<-remaining_taxa[names(cleanTaxa_take3)]
+remaining_taxa$class<-ifelse(remaining_taxa$class == "Actinopteri", "Teleostei", remaining_taxa$class)
+
+#Removing the NA to rbind
+cleanTaxa_take3<-subset(cleanTaxa_take3, !is.na(phylum))
+cleanTaxa_take4<-rbind(cleanTaxa_take3,remaining_taxa)
+
+#Getting just the sequence data to merge back
+remove_col<-c("phylum","class","order","family","genus","species","taxa")
+sequence_data<-merged_mifish
+sequence_data[remove_col]<-NULL
+
+cleaned_data<-left_join(cleanTaxa_take4, sequence_data, by = "OTU")
+
+```
+
+
+# Adding IUCN
+
+```{r}
+# The functions are super picky....need to get a list of species and not blanks or NA can be in that list
+# Sorting the species
+spp_check<- sort(unique(cleaned_data$species)[-which(unique(cleaned_data$species) %in% c(NA,""))])
+
+
+# this function is grabbing the lists within lists of the crazy annoting IUCN data and needs to be within the loop. Unfortunately, if the species is not known or hasn't been reviewed for IUCN, the function iucn_status which you use after you create a list of list from your species using iucn_summary from taxize won't work because there's an NA. It's irritable. Anyway, this was the only work aronud I could make work.
+
+get_elements <- function(x, element) {
+  if(is.list(x))
+  {
+    if(element %in% names(x)) x[[element]]
+    else lapply(x, get_elements, element = element)
+  }
+}
+
+share_list = list()
+for ( i in 1:length(spp_check)){
+  # grabbing the iucn_summary data for each species individually 
+    # even if it's NA, it will save into the sharelist
+  check<-iucn_summary(spp_check[i]) 
+ x<- get_elements(check, "red_list_category")
+ y<-unlist(get_elements(x, "code"))
+   share_list[i]<-do.call(rbind, lapply(y, data.frame))
+}
+# now have to convert the NA to a value cause otherwise when you unlist, it removes all the NA preventing you from merging back to the dataframe
+is.na(share_list) <- lengths(share_list) == 0
+# unlisting the list to a dataframe
+iucn_result<-as.data.frame(unlist(share_list))
+# creating a column name to then merge
+colnames(iucn_result)<-"iucn_status"
+# May need to add a row to the end because the last row was an NA and not added to the list in the loop
+iucn_result[nrow(iucn_result)+1,] <-NA
+# adding the species data back
+iucn_result$species<-spp_check
+
+# merging to dataframe
+cleaned_data<-left_join(cleaned_data, iucn_result, by = "species")
+# replacing NA with 0
+cleaned_data[is.na(cleaned_data) ]<- ""
+
+cleaned_data<-cleaned_data %>% select(c("iucn_status"), everything()) 
+
+
+
+```
+
+
+
+# Country Records
+Here I'm drawing polygons based on EEZ zone from <https://www.marineregions.org/eezsearch.php> the country and using these coordinates within GBIF and OBIS to see whether a record for these species exist within the databases acknowledging that there are a number of gaps in these databases and the species that are not found may still be there. But this is the best and most efficient way in terms of time in narrowing the process down. Unfortunately species lists do not always exists.
+
+#### GBIF - include IUCN
+
+
+```{r}
+
+
+gbif<-occ_data(geometry = c(139.1, -14.85, 162.83,  2.1))
+
+gbif2<-gbif$data
+gbif3<-distinct(gbif2[,c("species")])
+colnames(gbif3)[1]<-"scientificName"
+
+
+```
+
+#### OBIS
+
+```{r}
+
+obis<-occurrence(geometry = "POLYGON ((139.1 -14.85, 139.1 2.1, 162.83 2.1, 162.83 -14.85))", wrims = TRUE, exclude = "ON_LAND")
+
+obis2<-distinct(obis[,c("scientificName")])
+
+Check<-checklist(geometry = "POLYGON ((139.1 -14.85, 139.1 2.1, 162.83 2.1, 162.83 -14.85))")
+Check2<-subset(Check, taxonRank == "Species")
+Check3<-Check2[,c("acceptedNameUsage")]
+colnames(Check3)[1]<-"scientificName"
+
+obis_all<-distinct(rbind(obis2, Check3))
+
+```
+
+#### Database pooling GBIF, and OBIS
+
+```{r}
+
+# Merge all together and then see....
+All_ids<-distinct(rbind(obis_all,gbif3))
+All_ids$PNG<-"Yes"
+
+# How many of these are listed in the database?
+cleaned_data2<-left_join(cleaned_data, All_ids, by = c("species"="scientificName"))
+cleaned_data2$PNG<-ifelse(is.na(cleaned_data2$PNG),"No",cleaned_data2$PNG)
+cleaned_data2<-cleaned_data2 %>% select(c("PNG"), everything()) 
+
+```
+
+# Fishbase metadata
+
+#### Fishbase Distributions
+
+This is grabbing fishbase geographical locations for fish taxa to see whether the remaining fish species not found in the locational database in country's EEZ recorded in the western and central Pacific.
+
+```{r}
+
+fish_distribution<-cleaned_data2 %>% 
+  filter(class %in% c("Teleostei", "Elasmobranchii")) 
+
+fishBaseSp<-species(fish_distribution$species)
+setdiff(fish_distribution$species, fishBaseSp$Species)
+# not all populated
+fishBaseSpNO<-anti_join(fish_distribution, fishBaseSp, by = c("species" = "Species"))
+
+fishBaseSp2<-fishBaseSp[,c("Species","DemersPelag","Fresh")]
+
+# getting distribution data - function would not accept the species list from the dataframe to getting all info and narrowing it down myself.
+distfish<-as.vector(fishBaseSp2$Species)
+fishBaseDist<-faoareas(distfish, fields = c("Status","FAO"))
+
+# narrowing down the distribution to Pacific
+fishBaseDist2<-fishBaseDist %>%
+   filter(str_detect(FAO, "Pacific"))
+# selecting only species of interest
+fishBaseDist3<-left_join(fishBaseSp2, fishBaseDist2, by = "Species")
+#  narrowing down distributions further
+fishBaseDist4<-fishBaseDist3 %>%
+   filter(str_detect(FAO, "Western Central"))
+#what's missing
+fishBaseDist_NO<-anti_join(fishBaseDist3, fishBaseDist4, by = "Species")
+
+# Keeping ones that are still Pacific and checking those with NA in fishbase and will make them congeners if don't match up geographically
+
+fishBaseDist_NO$FAO<-ifelse(fishBaseDist_NO$Species == "Heteropriacanthus cruentatus", "Pacific", fishBaseDist_NO$FAO)
+
+fishBaseDist_NO$FAO<-ifelse(fishBaseDist_NO$Species == "Eviota guttata", "Congener", fishBaseDist_NO$FAO)
+
+
+# This one a congener
+fishBaseDist_NO$FAO<-ifelse(is.na(fishBaseDist_NO$FAO), "Congener", fishBaseDist_NO$FAO)
+
+
+fishBaseDist5<-rbind(fishBaseDist4,fishBaseDist_NO)
+fishBaseDist6 <- fishBaseDist5[!duplicated(fishBaseDist5$Species),]
+
+# Anything checked and not in Pacific is being removed despite that it c
+# removeTaxa<-subset(fishBaseDist6, is.na(FAO))
+# removeTaxa<-as.list(removeTaxa$Species)
+# fishdistribution<- fishdistribution[ !fishdistribution$taxon_valid_name %in% removeTaxa, ]
+
+fish_distribution2<-left_join(fish_distribution, fishBaseDist6, by = c("species" = "Species"))
+
+# Merging back to main dataframe
+cleaned_data3<-left_join(cleaned_data2, fish_distribution2[,c("OTU","Fresh","Status","FAO", "DemersPelag")])
+cleaned_data3 <- cleaned_data3 %>% select(c("Fresh","Status", "FAO","DemersPelag"), everything()) 
+# Congeners are not getting a species name anymore and just a genus
+cleaned_data3$species<-ifelse(cleaned_data3$FAO == "Congener",
+                  cleaned_data3$genus, cleaned_data3$species)
+
+
+
+```
+
+#### Fishbase Habitat
+
+```{r}
+
+fish_habitat<-cleaned_data3
+
+count(fish_habitat$family)
+count(fish_habitat$DemersPelag)
+ # fish_habitat %>% count(family) #60
+ # fish_habitat %>% count(DemersPelag)
+
+fish_habitatNo<-subset(fish_habitat, is.na(DemersPelag))
+
+# adding habitat type based on families...it's coarse but mostly accurate...
+
+## Make sure to check fish_habitatNo rbinding to ensure all is accounted for
+
+fish_habitatNo<-fish_habitatNo %>% mutate(DemersPelag = if_else(family %in% c( "Carangidae", ""),"unknown", fish_habitatNo$DemersPelag))
+
+fish_habitatNo<-fish_habitatNo %>% mutate(DemersPelag = if_else(genus %in% c( "Ferdauia", "Carcharhinus","Uraspis"),"reef-associated", fish_habitatNo$DemersPelag))
+
+fish_habitatNo<-fish_habitatNo %>% mutate(DemersPelag = if_else(family %in% c("Acanthuridae","Apogonidae","Anthiadidae","Balistidae","Belonidae","Blenniidae","Bythitidae", "Caesionidae", "Chaetodontidae", "Chlopsidae","Dasyatidae", "Cichlidae", "Cirrhitidae","Diodontidae","Gobiesocidae","Gobiidae","Engraulidae","Ephippidae","Epinephelidae", "Kuhliidae", "Syngnathidae","Trichonotidae", "Callionymidae", "Hemiramphidae","Holocentridae","Kyphosidae","Labridae","Lethrinidae","Lutjanidae", "Moringuidae", "Monacanthidae","Mullidae","Mugilidae", "Muraenidae","Ophichthidae","Pempheridae","Pomacanthidae","Ostraciidae","Plotosidae", "Pomacentridae","Pinguipedidae","Priacanthidae", "Pseudochromidae","Scaridae", "Scorpaenidae","Serranidae","Soleidae","Siganidae", "Sphyraenidae","Synodontidae","Tetraodontidae","Tripterygiidae"), "reef-associated", fish_habitatNo$DemersPelag))
+
+
+fish_habitatNo<-fish_habitatNo %>% mutate(DemersPelag = if_else(family %in% c( "Chiasmodontidae","Gonostomatidae", "Myctophidae", "Ophidiidae","Phosichthyidae","Gigantactinidae", "Stomiidae","Synaphobranchidae"),"bathypelagic", fish_habitatNo$DemersPelag))
+
+fish_habitatNo<-fish_habitatNo %>% mutate(DemersPelag = if_else(family %in% c( "Exocoetidae","Istiophoridae","Nomeidae", "Scombridae","Echeneidae" ),"pelagic-oceanic", fish_habitatNo$DemersPelag))
+
+
+fish_habitatNo<-fish_habitatNo %>% mutate(DemersPelag = if_else(family %in% c( "Clupeidae","Atherinidae","Triacanthodidae"),"pelagic-neritic",fish_habitatNo$DemersPelag))
+
+fish_habitatNo<-fish_habitatNo %>% mutate(DemersPelag = if_else(family %in% c( "Eleotridae","Toxotidae","Ambassidae","Leiognathidae","Moringuidae","Anguillidae"),"Brackish",fish_habitatNo$DemersPelag))
+
+
+fish_habitat2<-subset(fish_habitat, !is.na(DemersPelag))
+fish_habitat3<-rbind(fish_habitat2, fish_habitatNo)
+colnames(fish_habitat3)[which(names(fish_habitat3) == "DemersPelag")] <- "habitat_fishbase"
+
+# Adding additional metadata to main file
+cleaned_data4<-left_join(cleaned_data3, fish_habitat3[,c("OTU","habitat_fishbase")], by = c("OTU"))
+cleaned_data4$DemersPelag<-NULL
+
+##
+
+
+```
+
+# Fish Trophic
+
+```{r}
+trophic<-read.csv("~/Google Drive/My Drive/Pristine Seas/SCIENCE/datasets/ps-taxa-lists/Cleaned_AllFish_20240130.csv")
+trophic$accepted_scientific_name<-trimws(trophic$accepted_scientific_name)
+trophic$family<-trimws(trophic$family)
+trophic$common_family<-trimws(trophic$common_family)
+trophic<-distinct(trophic)
+trophic2<-trophic[,c("accepted_scientific_name","consumer","trophic_group","detailed_trophic_group")]
+trophic3 <-left_join(cleaned_data4, trophic2, by = c("species" = "accepted_scientific_name"))
+
+trophic3<-distinct(trophic3)
+
+### Adding common_family back into dataframe
+## Make sure to check that all common families are represented
+trophic4<-left_join(trophic3, unique(trophic[,c("family","common_family")]), by = "family")
+
+
+
+# Are there any families not captured in the trophic list?
+commonRemain<-subset(trophic4, is.na(common_family))
+# Acropomatidae and Clupeidae
+sort(unique(trophic$family)) #are not yet represented in our main document.
+# Adding them
+
+trophic4$common_family<-ifelse(trophic4$family == "Acropomatidae",
+             "lanternbellies",trophic4$common_family)
+
+trophic4$common_family<-ifelse(trophic4$family == "Clupeidae",
+             "Herring, sardines",trophic4$common_family)
+
+trophic4$common_family<-ifelse(trophic4$family == "Serranidae",
+             "Groupers",trophic4$common_family)
+
+trophic4$common_family<-ifelse(trophic4$family == "Myliobatidae",
+             "Eagle rays",trophic4$common_family)
+
+trophic4$common_family<-ifelse(trophic4$family == "Ambassidae",
+             "Glassfishes",trophic4$common_family)
+
+trophic4$common_family<-ifelse(trophic4$family == "Sillaginidae",
+             "Smelt-whitings",trophic4$common_family)
+
+trophic4$common_family<-ifelse(trophic4$family == "Anguillidae",
+             "Freshwater eels",trophic4$common_family)
+
+trophic4$common_family<-ifelse(trophic4$family == "Rhyacichthyidae", "Loach gobies",trophic4$common_family)
+
+trophic4$common_family<-ifelse(trophic4$family == "Toxotidae", "Archerfish",trophic4$common_family)
+
+trophic4$common_family<-ifelse(trophic4$order == "Testudines", "Sea Turtle", trophic4$common_family)
+trophic4$common_family<-ifelse(trophic4$family == "Delphinidae", "Dolphin", trophic4$common_family)
+trophic4$common_family<-ifelse(trophic4$family == "Balaenopteridae", "Baleen whale", trophic4$common_family)
+trophic4$common_family<-ifelse(trophic4$family == "Physeteridae", "Sperm whale", trophic4$common_family)
+trophic4$common_family<-ifelse(trophic4$class == "Holothuroidea", "Sea cucumber", trophic4$common_family)
+
+trophic4$common_family<-ifelse(trophic4$family == "Paralepididae",
+             "Barracudinas",trophic4$common_family)
+trophic4$common_family<-ifelse(trophic4$family == "Cypraeidae",
+             "Cowrie",trophic4$common_family)
+
+trophic4$common_family<-ifelse(trophic4$family == "Miniopteridae", "Bat", trophic4$common_family)
+trophic4$common_family<-ifelse(trophic4$family == "Scincidae", "Lizard", trophic4$common_family)
+trophic4$common_family<-ifelse(trophic4$family == "Clypeasteridae", "Sea urchin", trophic4$common_family)
+trophic4$common_family<-ifelse(trophic4$family == "Bucerotidae", "Hornbill", trophic4$common_family)
+trophic4$common_family<-ifelse(trophic4$family == "Muridae", "Rodent", trophic4$common_family)
+trophic4$common_family<-ifelse(trophic4$family == "Vespertilionidae", "Bat", trophic4$common_family)
+trophic4$common_family<-ifelse(trophic4$family == "Pteropodidae", "Flying Fox", trophic4$common_family)
+
+
+
+# Doubling checking that all families are captured with a common name
+commonRemain<-subset(trophic4, is.na(common_family))
+unique(commonRemain$family)
+
+
+
+```
+
+# Cleaned MiFish
+
+```{r}
+
+working<-trophic4
+working <- select(working, OTU,common_family, phylum,class,order,family,genus,species,taxa,PNG,zotu_All,Fresh,FAO,Status, habitat_fishbase,consumer,trophic_group,detailed_trophic_group, iucn_status, everything())
+
+
+### Need to get sequence data to attach to this output.
+
+### Creating a sequence file in case you want to use for phylotree
+# sequences_for_fasta<-as.data.frame(left_join(working[,c("OTU","taxa")], df_mifish[,c("OTU","sequence")], by = "OTU"))
+# sequences_for_fasta$taxa<-NULL
+# colnames(sequences_for_fasta)<-c("names","sequences")
+
+# Just the taxonomy
+taxa_table<-working[,c("OTU","common_family","phylum","class","order","family","genus","species","taxa")]
+
+# All samples metdata
+samples_metadata_data_table<-working[,c("OTU", "taxa","iucn_status", "Fresh","PNG","habitat_fishbase","consumer","trophic_group","detailed_trophic_group","Status","FAO")]
+
+### Just the OTU table
+otu_col<-grepl("PNG",names(working))
+otu_table<-working[,otu_col]
+otu_table$OTU<-working$OTU
+otu_table <- otu_table %>% select("OTU", everything()) 
+otu_table$PNG<-NULL
+
+#### Everything together
+taxa_and_metadata_by_site<-working
+
+save(taxa_and_metadata_by_site, otu_table, samples_metadata_data_table,taxa_table, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_edna_MifishU.RData")
+
+
+write.csv(working, "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_Leg2_taxa_by_site_MifishU.csv", row.names = F)
+
+
+```
