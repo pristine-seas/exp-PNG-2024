@@ -45,7 +45,7 @@ recruit$Site<-NULL
 recruit$Direction<-NULL
 recruit$Region<-NULL
 # making proper region
-recruit<-recruit %>% mutate(region = if_else(subregion %in% c( "Massau", "Emirau","Tench"),"Murat", "Lovongai"))
+recruit<-recruit %>% mutate(region = if_else(subregion %in% c( "Mussau", "Emirau","Tench"),"Murat", "Lovongai"))
 # ordering columns
 recruit<-recruit[,c("exp_id","region","subregion", "ps_site_id","ps_station_id", "Transect","Depth", "Quadrats","Genus","Size_cm", "Observer" )]
 # renaming some
@@ -64,10 +64,10 @@ recruit$genus<-ifelse(recruit$genus == "Coelerastrea","Coelastrea", recruit$genu
 recruit$genus<-ifelse(recruit$genus == "Merlunina","Merulina", recruit$genus)
 recruit$genus<-ifelse(recruit$genus == "Serioptera", "Seriatopora", recruit$genus)
 recruit$genus<-ifelse(recruit$genus == "Mussidae","Faviidae", recruit$genus)
-# creating unique values per row to map back
-recruit<- recruit %>% 
- mutate(observation = 1:n())
 
+# creating unique values per row to map back
+recruit$observation<- 1:nrow(recruit) 
+  
 cleanTaxa<-distinct(recruit[,c("genus","observation")])
 
 taxonomy_worms <- cleanTaxa$genus %>% 
@@ -142,11 +142,18 @@ quads<-recruit2 %>%
   left_join(one_depth)%>%
    mutate(one=replace_na(one, "two"))
 
-quads$amount<-ifelse(quads$one == "two" & quads$quadrats == 10, 20*.25, quads$quadrats )
-quads$amount<-ifelse(quads$one == "two" & quads$quadrats == 6, 16*.25, quads$amount)
-quads$amount<-ifelse(quads$one == "one" & quads$quadrats == 10, 10*.25, quads$amount)
+quads$area_m2<-ifelse(quads$one == "two" & quads$quadrats == 10, 20*.25, quads$quadrats )
+quads$area_m2<-ifelse(quads$one == "two" & quads$quadrats == 6, 16*.25, quads$area)
+quads$area_m2<-ifelse(quads$one == "one" & quads$quadrats == 10, 10*.25, quads$area_m2)
 
-quads_dens<-quads[,c("ps_site_id","amount")]
+quads_dens<-quads[,c("ps_site_id","area_m2")]
+
+#Density file
+recruit_quad_area_by_site<-quads_dens %>%
+  left_join(.,unique(recruit2[,c("region","subregion","ps_site_id")]), by = "ps_site_id") %>%
+  na.omit
+
+
 
 
 recruit_density_by_station_genus <- recruit2 %>% 
@@ -176,16 +183,15 @@ recruit_density_by_site_family <- recruit2 %>%
   mutate(count = 1)%>%
   group_by(ps_site_id, family) %>%
   dplyr::summarise(count = sum(count)) %>%
- left_join(.,quads_dens, by = "ps_site_id", relationship = "many-to-many") %>%
+ left_join(quads_dens, by = "ps_site_id", relationship = "many-to-many") %>%
   group_by(ps_site_id, family) %>%
   dplyr::summarise(count = count, ind_m2 = round((count/amount),2))
 
 raw_cleaned_recruits<-recruit2
 
-save(recruit_density_by_station_genus, recruit_density_by_station_family, recruit_density_by_site_genus, recruit_density_by_site_family, raw_cleaned_recruits, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/recruits/PNG_2024_uvs_recruit.RData")
+save(recruit_density_by_station_genus, recruit_density_by_station_family, recruit_quad_area_by_site, recruit_density_by_site_genus, recruit_density_by_site_family, raw_cleaned_recruits, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/recruits/PNG_2024_uvs_recruit.RData")
 
-save(recruit_density_by_station_genus, recruit_density_by_station_family, recruit_density_by_site_genus, recruit_density_by_site_family, raw_cleaned_recruits,  file = "PNG_2024_uvs_recruit.RData")
+#save(recruit_density_by_station_genus, recruit_density_by_station_family, recruit_density_by_site_genus, recruit_density_by_site_family, raw_cleaned_recruits,  file = "PNG_2024_uvs_recruit.RData")
 
-load("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/fish/fish.RData")
 
 ```

@@ -23,9 +23,24 @@ library(dplyr)
 #setwd("~/Documents/PS eDNA/PNG_2024/")
 ```
 
-## UVS Inverts - cleaning file
+# Sites and stations
 
-### File Cleaning - Leg 1
+```{r}
+
+stations<-readRDS("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/stations.rds")
+
+stations_fish<-stations$fish %>%
+  select(ps_station_id,ps_site_id,depth_m,depth_strata)
+
+sites<-readRDS("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/sites.rds")
+
+sites_uvs<-sites$uvs
+
+```
+
+# UVS Inverts - cleaning file
+
+### Cleaning - Leg 1
 
 ```{r}
 leg1_invert<-read_excel("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/raw/benthos/PNG_2024_inverts_fieldsheet_MT.xlsx", sheet = 1)
@@ -50,16 +65,10 @@ leg1_invert<-leg1_invert[,c("exp_id","leg","region","subregion", "ps_site_id","p
 
 ```
 
-#### Cleaning up Leg 2 Resource inverts
+### Cleaning up Leg 2 Resource inverts
 
 ```{r}
 
-stations<-readRDS("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/stations.rds")
-
-stations_fish<-stations$fish %>%
-  select(ps_station_id,ps_site_id,depth_m,depth_strata)
-
-  
 leg2_invert<-read_excel("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/raw/benthos/Invertebrates Caselle PNG.xlsx", sheet =  1)
 
 leg2_invert$ps_site_id<-"PNG_2024_uvs_0"
@@ -327,6 +336,8 @@ invert_taxa_table[is.na(invert_taxa_table) ]<- ""
 
 ```
 
+### Calculating Transect areas
+
 ```{r}
 # Getting the area for leg 1. There were not two transects at each site and unfortunately this was not captured in the datasheet
 
@@ -336,12 +347,26 @@ transects_leg1<-as.data.frame(one_depth) %>%
   mutate(area_m2 = "50")%>%
   `colnames<-`(c("ps_site_id","area_m2"))
 
-# Need to get number of transect to calculate density here
-transects_leg2<-stations$fish %>%
-  distinct(ps_site_id, n_transects)%>%
-  group_by(ps_site_id) %>%
-  dplyr::summarise(n_transects = sum(n_transects)) %>%
-   mutate(area_m2 = 50*n_transects) 
+leg1_transect_area<-sites$uvs %>%
+  filter(inverts == T) %>%
+  left_join(.,transects_leg1, by = "ps_site_id") %>%
+  select(ps_site_id, area_m2) %>%
+  mutate(n_transects = ifelse(is.na(area_m2),"2","1")) %>%
+  mutate(area_m2 = ifelse(is.na(area_m2), "100", area_m2)) %>%
+  distinct(ps_site_id,n_transects,area_m2)
+
+
+# Getting the area for leg 2. The number of transect could vary between 2 and 3
+# Jen said her transects were 25 x 2 so each is 50m2
+leg2_transect_area<-stations$fish %>%
+  filter(diver == "JEC") %>%
+  distinct(ps_site_id, n_transects) %>%
+  mutate(area_m2 = n_transects*50)
+
+# merging them together to get all area for resource invert calculations, the one thing that unifies leg 1 and leg 2 inverts
+
+invert_transect_area<-rbind(leg1_transect_area, leg2_transect_area) %>%
+  mutate(area_m2 = as.numeric(area_m2))
 
 
 ```
@@ -350,19 +375,12 @@ transects_leg2<-stations$fish %>%
 
 ```{r}
 
-leg1_transect_area<-sites$uvs %>%
-  filter(inverts == T) %>%
-  left_join(.,transects_leg1, by = "ps_site_id") %>%
-  select(ps_site_id, area_m2) %>%
-  mutate(area_m2 = ifelse(is.na(area_m2), "100", area_m2))
-
-
 invert_leg1_avg_by_site <- invert2 %>% 
   filter(transect != "Off") %>%
   filter(leg == "leg 1") %>%
   group_by(ps_site_id , common_name, taxon_valid_name) %>%
     dplyr::summarise(n_individuals = n())%>%
-      left_join(.,leg1_transect_area, by  = "ps_site_id") %>%
+      left_join(.,invert_transect_area, by  = "ps_site_id") %>%
   as.data.frame()
 # Can't seem to pipe the damn density!!!
 invert_leg1_avg_by_site$area_m2<-as.numeric(invert_leg1_avg_by_site$area_m2)
@@ -378,33 +396,20 @@ invert_leg1_avg_by_station <- invert2 %>%
   dplyr::summarise(ind_m2 = n_individuals/50)
 
 ### Giant Clams and Sea Cucumnbers to merge Leg1 and Leg 2
-resource_invert_leg1_avg_by_site<-invert_leg1_avg_by_site %>%
-  filter(common_name == "Giant clams" | common_name == "Sea cucumber")
-
-
-
-# Jen said her transects were 25 x 2 so each is 50m
-resource_invert_leg2_avg_by_site<-invert2 %>%
-    filter(transect != "Off", leg == "leg 2") %>%
-filter(common_name == "Giant clams" | common_name == "Sea cucumber",count != 0)%>%
-  group_by(ps_site_id, common_name, taxon_valid_name) %>%
+resource_inverts_avg_by_site<-raw_cleaned_inverts %>%
+    filter(common_name == "Giant clams" | common_name == "Sea cucumber" & transect != "Off") %>%
+  group_by(leg, ps_site_id, common_name)%>%
    dplyr::summarise(n_individuals = n()) %>%
-    left_join(.,site_transect_fish, by = "ps_site_id") %>%
-  mutate(area_m2 = 50*n_transects) %>%
-     group_by(ps_site_id, common_name, taxon_valid_name,n_individuals, area_m2) %>%
-  dplyr::summarise(ind_m2 = round(n_individuals/area_m2,2))
-
-resource_invert_leg2_avg_by_site$n_transects<-NULL
+  left_join(invert_transect_area, by = "ps_site_id")%>%
+  mutate(ind_m2 = round(n_individuals/area_m2,2))
 
 
-resource_inverts_avg_by_site<-rbind(resource_invert_leg1_avg_by_site, resource_invert_leg2_avg_by_site)
-
-
+# renaming main file 
 raw_cleaned_inverts<-invert2
 
 
-save(invert_leg1_avg_by_site, invert_leg1_avg_by_station, resource_inverts_avg_by_site,invert_taxa_table, raw_cleaned_inverts,  file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/invert/PNG_2024_uvs_invert.RData")
+save(invert_leg1_avg_by_site, invert_leg1_avg_by_station, resource_inverts_avg_by_site,invert_taxa_table, raw_cleaned_inverts,invert_transect_area, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/invert/PNG_2024_uvs_invert.RData")
 # 
- save(invert_leg1_avg_by_site, invert_leg1_avg_by_station, resource_inverts_avg_by_site,invert_taxa_table, raw_cleaned_inverts,  file = "PNG_2024_uvs_invert.RData")
+
 
 ```
