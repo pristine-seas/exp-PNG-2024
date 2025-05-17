@@ -222,45 +222,83 @@ taxonomy_worms$species<-ifelse(taxonomy_worms$species == T,taxonomy_worms$taxon_
 # are there any differences or do they all match up?
 setdiff(invert$taxa, taxonomy_worms$taxon_valid_name)
 
+invert2<-left_join(invert, taxonomy_worms, by = c("taxa"="taxon_valid_name"))
+
 
 ```
 
-### Calculating Transect areas
+#### Adding Common Name
 
 ```{r}
-# Leg 1
-# Need to get area values by Leg because methods and area were not consistent.
-# Fo leg 1, two transects at each site was not consisent and unfortunately this was not captured in the field datasheet
-
-one_depth<-c("PNG_2024_uvs_026","PNG_2024_uvs_029","PNG_2024_uvs_030","PNG_2024_uvs_031","PNG_2024_uvs_032","PNG_2024_uvs_036","PNG_2024_uvs_037","PNG_2024_uvs_038","PNG_2024_uvs_039","PNG_2024_uvs_040","PNG_2024_uvs_041","PNG_2024_uvs_042")
-
-# adding transect area across all as if one depth/transect
-transects_leg1<-as.data.frame(one_depth) %>%
-  mutate(area_m2 = "50")%>%
-  `colnames<-`(c("ps_site_id","area_m2"))
-# Modifing such that if two depths/transects, then replacing transect area accordingly
-leg1_transect_area<-sites$uvs %>%
-  filter(inverts == T) %>%
-  left_join(.,transects_leg1, by = "ps_site_id") %>%
-  select(ps_site_id, area_m2) %>%
-  mutate(n_transects = ifelse(is.na(area_m2),"2","1")) %>%
-  mutate(area_m2 = ifelse(is.na(area_m2), "100", area_m2)) %>%
-  distinct(ps_site_id,n_transects,area_m2)
 
 
-# Leg 2
-# The number of transect could vary between 2 and 3
-# Jen said her transects were 25 x 2 so each is 50m2
-leg2_transect_area<-stations$fish %>%
-  filter(diver == "JEC") %>%
-  distinct(ps_site_id, n_transects) %>%
-  mutate(area_m2 = n_transects*50)
+invert2 <- invert2 %>%
+    mutate(., common_name = with(., case_when(
+      (species == "Turbo marmoratus") ~ "Green snail",
+        (genus == "Tridacna" | genus == "Hippopus") ~ "Giant clams",
+      (genus == "Pteria") ~ "Penguin wing",
+      (genus == "Charonia") ~ "Triton trumpet",
+        (genus == "Turbo") ~ "Turban snail",
+        (genus == "Lambis") ~ "Conch",
+        (genus == "Pinctada") ~ "Pearl oyster" ,
+        (genus == "Trochus") ~ "Trochus" ,
+        (family == "Plakobranchidae" | family == "Volvatellidae") ~ "Sea slugs",
+        (family == "Diogenidae" | family == "Paguridae") ~"Hermit crab",
+        (family == "Tetraliidae" | family == "Trapeziidae") ~ "Coral crab",
+        (family == "Alpheidae" | family == "Palaemonidae"| family == "Stenopodidae") ~ "Shrimp",
+        (family == "Palinuridae" | family == "Scyllaridae") ~ "Lobster",
+        (family == "Agalmatidae" | family == "Athorybiidae" | family == "Prayidae" | family == "Forskaliidae" | family == "Diphyidae") ~ "Siphonophore",
+       (order == "Antipatharia") ~ "Black coral",
+        (order == "Zoantharia") ~ "Zoanthid",
+        (order == "Euphausiacea")~ "Krill",
+        (order == "Amphipoda")~ "Amphipods",
+        (order == "Salpida")~ "Salps",
+        (order == "Octopoda")~ "Octopus",
+        (order == "Actiniaria") ~ "Sea anenome",
+        (order == "Stomatopoda") ~ "Stomatopod",
+        (order == "Aplysiida" | order == "Cephalaspidea" | order == "Nudibranchia" | order == "Pleurobranchida") ~ "Sea slugs",
+        (order == "Scleractinia") ~ "Hard coral",
+        (class == "Copepoda") ~"Copepods",
+        (class == "Hexanauplia") ~"Copepods",
+        (class == "Thecostraca") ~ "Barnacle",
+        (class == "Holothuroidea") ~ "Sea cucumber",
+        (class == "Appendicularia") ~"Larvacean",
+        (class == "Asteroidea") ~ "Sea stars",
+        (class == "Octocorallia") ~"Soft corals",
+        (class == "Gastropoda") ~ "Snails",
+        (class == "Florideophyceae") ~ "Red algae",
+        (class == "Phaeophyceae") ~ "Brown algae",
+        (class == "Echinoidea") ~ "Sea urchin",
+        (class == "Ophiuroidea") ~ "Brittle stars",
+        (class == "Palaeonemertea") ~ "Ribbon worms",
+        (class == "Scyphozoa") ~ "Jellyfish",
+        (class == "Hydrozoa") ~ "Hydroids",
+        (class == "Ascidiacea") ~ "Tunciate",
+        (class == "Crinoidea") ~  "Crinoid",
+        (class == "Polyplacophora") ~  "Chiton",
+        (class == "Cubozoa") ~ "Box jelly",
+        (class == "Bivalvia") ~ "Bivalves",
+        (phylum == "Annelida") ~ 'Worms',
+        (phylum == "Porifera") ~ 'Sponges',
+        (phylum == "Nematoda") ~ 'Nematodes',
+        (phylum == "Nemertea") ~ 'Ribbon worms',
+        (phylum == "Bryozoa") ~ 'Bryozoans',
+        (phylum == "Platyhelminthes") ~ "Flat worm",
+        (phylum == "Chaetognatha") ~ 'ArrowWorms',
+        (phylum == "Porifera") ~ 'Sponges',
+        (phylum == "Entoprocta") ~ 'Goblet worms',
+        (phylum == "Chlorophyta") ~ "Green algae")))
 
-# merging them together to get all area for resource invert calculations, the one thing that unifies leg 1 and leg 2 inverts
 
-invert_transect_area<-rbind(leg1_transect_area, leg2_transect_area) %>%
-  mutate(area_m2 = as.numeric(area_m2))
+unk<-subset(invert2, is.na(common_name))
+sort(unk$taxa)
 
+### Adding Resource Invert Column
+invert2<- invert2 %>%
+    mutate(., resource_invert = with(., case_when(
+        (common_name %in% c("Sea cucumber","Giant clams","Pearl oyster", "Lobster","Trochus","Triton shell","Conch shell","Turban snail", "Octopus","Green snail","Triton trumpet", "Conch shell")) ~ "Y",
+(genus %in% c("Tripnuestes","Pteria","Echinothrix","Diadema","Heterocentrotus" )) ~ "Y"))) %>%
+  mutate(resource_invert = ifelse(!is.na(resource_invert), "Y","N"))
 
 ```
 
@@ -268,7 +306,7 @@ invert_transect_area<-rbind(leg1_transect_area, leg2_transect_area) %>%
 
 ```{r}
 # taking unique taxa to create Taxa Table
-invert_taxa_table<-unique(invert2[,c("common_name","phylum","class","order","family","genus","species","taxa")])
+invert_taxa_table<-unique(invert2[,c("common_name", "phylum","class","order","family","genus","species","taxa","resource_invert")])
 
 # The functions are super picky....need to get a list of species and not blanks or NA can be in that list
 # Sorting the species
@@ -316,6 +354,47 @@ invert2<-left_join(invert2, iucn_result, by = "species")
 
 ```
 
+### Calculating Transect areas
+
+```{r}
+# Leg 1
+# Need to get area values by Leg because methods and area were not consistent.
+# Fo leg 1, two transects at each site was not consisent and unfortunately this was not captured in the field datasheet
+
+one_depth<-c("PNG_2024_uvs_026","PNG_2024_uvs_029","PNG_2024_uvs_030","PNG_2024_uvs_031","PNG_2024_uvs_032","PNG_2024_uvs_036","PNG_2024_uvs_037","PNG_2024_uvs_038","PNG_2024_uvs_039","PNG_2024_uvs_040","PNG_2024_uvs_041","PNG_2024_uvs_042")
+
+# adding transect area across all as if one depth/transect
+transects_leg1<-as.data.frame(one_depth) %>%
+  mutate(area_m2 = "50")%>%
+  `colnames<-`(c("ps_site_id","area_m2"))
+# Modifing such that if two depths/transects, then replacing transect area accordingly
+leg1_transect_area<-sites$uvs %>%
+  filter(inverts == T) %>%
+  left_join(.,transects_leg1, by = "ps_site_id") %>%
+  select(ps_site_id, area_m2) %>%
+  mutate(n_transects = ifelse(is.na(area_m2),"2","1")) %>%
+  mutate(area_m2 = ifelse(is.na(area_m2), "100", area_m2)) %>%
+  distinct(ps_site_id,n_transects,area_m2)
+
+
+# Leg 2
+# The number of transect could vary between 2 and 3
+# Jen said her transects were 25 x 2 so each is 50m2
+leg2_transect_area<-stations$fish %>%
+  filter(diver == "JEC") %>%
+  distinct(ps_site_id, n_transects) %>%
+  mutate(area_m2 = n_transects*50)
+
+# merging them together to get all area for resource invert calculations, the one thing that unifies leg 1 and leg 2 inverts
+
+invert_transect_area<-rbind(leg1_transect_area, leg2_transect_area) %>%
+  mutate(area_m2 = as.numeric(area_m2))
+
+
+```
+
+#### 
+
 ## UVS Inverts - Densities
 
 ```{r}
@@ -330,7 +409,7 @@ invert_leg1_density_by_taxa_by_site <- invert2 %>%
                        size_cm  = 0)) %>%
       right_join(.,invert_transect_area, by  = "ps_site_id") %>%
     group_by(ps_site_id , common_name, taxa, area_m2) %>%
-    dplyr::summarise(n_individuals = sum(count))%>%
+    dplyr::summarise(n_individuals = sum(count), sd = sd(count))%>%
   mutate(ind_m2 = n_individuals/area_m2)
 
 # taxa by station
