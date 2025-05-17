@@ -42,6 +42,8 @@ sites_uvs<-sites$uvs
 
 ### Cleaning - Leg 1
 
+Modifying the data frame to follow the new naming conventions in the field data sheets
+
 ```{r}
 leg1_invert<-read_excel("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/raw/benthos/PNG_2024_inverts_fieldsheet_MT.xlsx", sheet = 1)
 
@@ -60,12 +62,15 @@ leg1_invert$direction<-NULL
 leg1_invert<-leg1_invert %>% mutate(region = if_else(subregion %in% c( "Massau", "Emirau","Tench"),"Murat", "Lovongai"))
 leg1_invert$leg<-"leg 1"
 leg1_invert<-leg1_invert[,c("exp_id","leg","region","subregion", "ps_site_id","ps_station_id", "transect","depth_m","taxa","count","size_cm", "notes","observer" )]
+colnames(leg1_invert)[colnames(leg1_invert)=="observer"]<-"divers"
 
 
 
 ```
 
 ### Cleaning up Leg 2 Resource inverts
+
+Modifying the data frame to follow the new naming conventions in the field data sheets
 
 ```{r}
 
@@ -99,7 +104,7 @@ leg2_invert3$scientific_name<-gsub(" spp.*","",leg2_invert3$scientific_name)
 leg2_invert3$scientific_name<-trimws(leg2_invert3$scientific_name)
 
 leg2_invert3<-leg2_invert3[,c("exp_id","leg","region","subregion", "ps_site_id","ps_station_id", "Transect","depth_m","scientific_name","Num","size_cm" , "Notes","observer")]
-colnames(leg2_invert3)<-c("exp_id","leg","region","subregion", "ps_site_id","ps_station_id", "transect","depth_m","taxa","count","size_cm", "notes", "observer")
+colnames(leg2_invert3)<-c("exp_id","leg","region","subregion", "ps_site_id","ps_station_id", "transect","depth_m","taxa","count","size_cm", "notes", "divers")
 
 setdiff(leg2_invert3$taxa,leg1_invert$taxa)
 invert<-rbind(leg1_invert, leg2_invert3)
@@ -123,6 +128,7 @@ invert$notes<-paste(invert$cf_sp, invert$notes, sep = "    ")
 invert$notes<-gsub("NA","",invert$notes)
 invert$cf_sp<-NULL
 
+# cleaning up taxa column so that it can be read into worms
 invert$taxa<-gsub(" sp.","",invert$taxa)
 invert$taxa<-gsub(" sp","",invert$taxa)
 invert$taxa<-gsub(" cf","",invert$taxa)
@@ -130,6 +136,7 @@ invert$taxa<-gsub(" 1","",invert$taxa)
 invert$taxa<-gsub(" 2","",invert$taxa)
 invert$taxa<-gsub(" aff","",invert$taxa)
 invert$taxa<-gsub("1","",invert$taxa)
+# a lot of names were mispelled after going through WORMS scripts and as a result, need to correct the names before reinjesting into the WORM script
 invert$taxa<-ifelse(invert$taxa == "Bohadaschia argus","Bohadschia argus",invert$taxa)
 invert$taxa<-ifelse(invert$taxa == "Calcinus minitus","Calcinus minutus",invert$taxa)
 invert$taxa<-ifelse(invert$taxa == "Cerithuyum echinatum","Cerithium echinatum",invert$taxa)
@@ -166,7 +173,7 @@ invert$taxa<-ifelse(invert$taxa == "Thelanota","Thelenota",invert$taxa)
 invert$taxa<-ifelse(invert$taxa == "Culcita novaeguineae ","Culcita novaeguineae",invert$taxa)
 invert$taxa<-ifelse(invert$taxa == "Panularis","Panulirus",invert$taxa)
 
-  
+# Running through WORMS for streamlined taxa names
 cleanTaxa<-distinct(invert[,c("taxa")])
 
 taxonomy_worms <- cleanTaxa$taxa %>% 
@@ -204,99 +211,68 @@ taxonomy_worms <- taxonomy_worms %>%
 
 
 taxonomy_worms<-as.data.frame(taxonomy_worms[,c("species","genus","family", "order","class","phylum", "taxon_valid_name")])
+# species isn't really species as it has the lowest taxon, so
+# remaking species column from taxon_valid_name
 
+# this just created a column called species and if there was a space (which would indicate a species name), then it marks it as true
+taxonomy_worms$species<-str_count(taxonomy_worms$taxon_valid_name, " ") > 0
+# if else statement, if T copy the taxon_valid_name, if F, then keep it blank
+taxonomy_worms$species<-ifelse(taxonomy_worms$species == T,taxonomy_worms$taxon_valid_name,"" )
+
+# are there any differences or do they all match up?
 setdiff(invert$taxa, taxonomy_worms$taxon_valid_name)
 
+
 ```
 
-#### Adding Common Name
+### Calculating Transect areas
 
 ```{r}
+# Leg 1
+# Need to get area values by Leg because methods and area were not consistent.
+# Fo leg 1, two transects at each site was not consisent and unfortunately this was not captured in the field datasheet
 
-invert2<-left_join(invert, taxonomy_worms, by = c("taxa" = "species"))
+one_depth<-c("PNG_2024_uvs_026","PNG_2024_uvs_029","PNG_2024_uvs_030","PNG_2024_uvs_031","PNG_2024_uvs_032","PNG_2024_uvs_036","PNG_2024_uvs_037","PNG_2024_uvs_038","PNG_2024_uvs_039","PNG_2024_uvs_040","PNG_2024_uvs_041","PNG_2024_uvs_042")
 
-invert2 <- invert2 %>%
-    mutate(., common_name = with(., case_when(
-        (genus == "Tridacna" | genus == "Hippopus") ~ "Giant clams",
-        (genus == "Pinctada") ~ "Pearl oyster" ,
-        (genus == "Trochus") ~ "Trochus" ,
-        (family == "Plakobranchidae" | family == "Volvatellidae") ~ "Sea slugs",
-        (family == "Diogenidae" | family == "Paguridae") ~"Hermit crab",
-        (family == "Tetraliidae" | family == "Trapeziidae") ~ "Coral crab",
-        (family == "Alpheidae" | family == "Palaemonidae"| family == "Stenopodidae") ~ "Shrimp",
-        (family == "Palinuridae" | family == "Scyllaridae") ~ "Lobster",
-        (family == "Agalmatidae" | family == "Athorybiidae" | family == "Prayidae" | family == "Forskaliidae" | family == "Diphyidae") ~ "Siphonophore",
-       (order == "Antipatharia") ~ "Black coral",
-        (order == "Zoantharia") ~ "Zoanthid",
-        (order == "Euphausiacea")~ "Krill",
-        (order == "Amphipoda")~ "Amphipods",
-        (order == "Salpida")~ "Salps",
-        (order == "Octopoda")~ "Octopus",
-        (order == "Actiniaria") ~ "Sea anenome",
-        (order == "Stomatopoda") ~ "Stomatopod",
-        (order == "Aplysiida" | order == "Cephalaspidea" | order == "Nudibranchia" | order == "Pleurobranchida") ~ "Sea slugs",
-        (order == "Scleractinia") ~ "Hard coral",
-        (class == "Copepoda") ~"Copepods",
-        (class == "Hexanauplia") ~"Copepods",
-        (class == "Thecostraca") ~ "Barnacle",
-        (class == "Holothuroidea") ~ "Sea cucumber",
-        (class == "Appendicularia") ~"Larvacean",
-        (class == "Asteroidea") ~ "Sea stars",
-        (class == "Octocorallia") ~"Soft corals",
-        (class == "Gastropoda") ~ "Snails",
-        (class == "Florideophyceae") ~ "Red algae",
-        (class == "Phaeophyceae") ~ "Brown algae",
-        (class == "Echinoidea") ~ "Sea urchin",
-        (class == "Ophiuroidea") ~ "Brittle stars",
-        (class == "Palaeonemertea") ~ "Ribbon worms",
-        (class == "Scyphozoa") ~ "Jellyfish",
-        (class == "Hydrozoa") ~ "Hydroids",
-        (class == "Ascidiacea") ~ "Tunciate",
-        (class == "Crinoidea") ~  "Crinoid",
-        (class == "Polyplacophora") ~  "Chiton",
-        (class == "Cubozoa") ~ "Box jelly",
-        (class == "Bivalvia") ~ "Bivalves",
-        (phylum == "Annelida") ~ 'Worms',
-        (phylum == "Porifera") ~ 'Sponges',
-        (phylum == "Nematoda") ~ 'Nematodes',
-        (phylum == "Nemertea") ~ 'Ribbon worms',
-        (phylum == "Bryozoa") ~ 'Bryozoans',
-        (phylum == "Platyhelminthes") ~ "Flat worm",
-        (phylum == "Chaetognatha") ~ 'ArrowWorms',
-        (phylum == "Porifera") ~ 'Sponges',
-        (phylum == "Entoprocta") ~ 'Goblet worms',
-        (phylum == "Chlorophyta") ~ "Green algae")))
+# adding transect area across all as if one depth/transect
+transects_leg1<-as.data.frame(one_depth) %>%
+  mutate(area_m2 = "50")%>%
+  `colnames<-`(c("ps_site_id","area_m2"))
+# Modifing such that if two depths/transects, then replacing transect area accordingly
+leg1_transect_area<-sites$uvs %>%
+  filter(inverts == T) %>%
+  left_join(.,transects_leg1, by = "ps_site_id") %>%
+  select(ps_site_id, area_m2) %>%
+  mutate(n_transects = ifelse(is.na(area_m2),"2","1")) %>%
+  mutate(area_m2 = ifelse(is.na(area_m2), "100", area_m2)) %>%
+  distinct(ps_site_id,n_transects,area_m2)
 
 
+# Leg 2
+# The number of transect could vary between 2 and 3
+# Jen said her transects were 25 x 2 so each is 50m2
+leg2_transect_area<-stations$fish %>%
+  filter(diver == "JEC") %>%
+  distinct(ps_site_id, n_transects) %>%
+  mutate(area_m2 = n_transects*50)
 
-unk<-subset(invert2, is.na(common_name))
-sort(unk$taxa)
+# merging them together to get all area for resource invert calculations, the one thing that unifies leg 1 and leg 2 inverts
+
+invert_transect_area<-rbind(leg1_transect_area, leg2_transect_area) %>%
+  mutate(area_m2 = as.numeric(area_m2))
 
 
 ```
 
-### Creating TaxaTable
+#### Creating Taxa Table and Adding IUCN Data
 
 ```{r}
-
-invert_taxa<-unique(invert2[,c("common_name","phylum","class","order","family","genus","taxa")])
-
-invert_taxa$species<-invert_taxa$taxa
-invert_taxa$species<-ifelse(invert_taxa$genus == invert_taxa$taxa, "", invert_taxa$species)
-invert_taxa$species<-ifelse(invert_taxa$family == invert_taxa$taxa, "", invert_taxa$species)
-invert_taxa$species<-ifelse(invert_taxa$class == invert_taxa$taxa, "", invert_taxa$species)
-invert_taxa<-invert_taxa[,c("common_name","phylum","class","order","family","genus","species", "taxa")]
-
-
-```
-
-#### Adding IUCN Data
-
-```{r}
+# taking unique taxa to create Taxa Table
+invert_taxa_table<-unique(invert2[,c("common_name","phylum","class","order","family","genus","species","taxa")])
 
 # The functions are super picky....need to get a list of species and not blanks or NA can be in that list
 # Sorting the species
-spp_check<- sort(unique(invert_taxa$species)[-which(unique(invert_taxa$species) %in% c(NA,""))])
+spp_check<- sort(unique(invert_taxa_table$species)[-which(unique(invert_taxa_table$species) %in% c(NA,""))])
 
 
 # this function is grabbing the lists within lists of the crazy annoting IUCN data and needs to be within the loop. Unfortunately, if the species is not known or hasn't been reviewed for IUCN, the function iucn_status which you use after you create a list of list from your species using iucn_summary from taxize won't work because there's an NA. It's irritable. Anyway, this was the only work aronud I could make work.
@@ -330,43 +306,12 @@ iucn_result[nrow(iucn_result)+1,] <-NA
 iucn_result$species<-spp_check
 
 # merging to dataframe
-invert_taxa_table<-left_join(invert_taxa, iucn_result, by = "species")
+invert_taxa_table<-left_join(invert_taxa_table, iucn_result, by = "species")
 # replacing NA with 0
 invert_taxa_table[is.na(invert_taxa_table) ]<- ""
 
-```
-
-### Calculating Transect areas
-
-```{r}
-# Getting the area for leg 1. There were not two transects at each site and unfortunately this was not captured in the datasheet
-
-one_depth<-c("PNG_2024_uvs_026","PNG_2024_uvs_029","PNG_2024_uvs_030","PNG_2024_uvs_031","PNG_2024_uvs_032","PNG_2024_uvs_036","PNG_2024_uvs_037","PNG_2024_uvs_038","PNG_2024_uvs_039","PNG_2024_uvs_040","PNG_2024_uvs_041","PNG_2024_uvs_042")
-
-transects_leg1<-as.data.frame(one_depth) %>%
-  mutate(area_m2 = "50")%>%
-  `colnames<-`(c("ps_site_id","area_m2"))
-
-leg1_transect_area<-sites$uvs %>%
-  filter(inverts == T) %>%
-  left_join(.,transects_leg1, by = "ps_site_id") %>%
-  select(ps_site_id, area_m2) %>%
-  mutate(n_transects = ifelse(is.na(area_m2),"2","1")) %>%
-  mutate(area_m2 = ifelse(is.na(area_m2), "100", area_m2)) %>%
-  distinct(ps_site_id,n_transects,area_m2)
-
-
-# Getting the area for leg 2. The number of transect could vary between 2 and 3
-# Jen said her transects were 25 x 2 so each is 50m2
-leg2_transect_area<-stations$fish %>%
-  filter(diver == "JEC") %>%
-  distinct(ps_site_id, n_transects) %>%
-  mutate(area_m2 = n_transects*50)
-
-# merging them together to get all area for resource invert calculations, the one thing that unifies leg 1 and leg 2 inverts
-
-invert_transect_area<-rbind(leg1_transect_area, leg2_transect_area) %>%
-  mutate(area_m2 = as.numeric(area_m2))
+# merging to dataframe
+invert2<-left_join(invert2, iucn_result, by = "species")
 
 
 ```
@@ -374,41 +319,54 @@ invert_transect_area<-rbind(leg1_transect_area, leg2_transect_area) %>%
 ## UVS Inverts - Densities
 
 ```{r}
-
-invert_leg1_avg_by_site <- invert2 %>% 
+invert2$size_cm<-as.numeric(invert2$size_cm)
+# Getting the average taxa by site
+invert_leg1_density_by_taxa_by_site <- invert2 %>% 
   filter(transect != "Off") %>%
   filter(leg == "leg 1") %>%
-  group_by(ps_site_id , common_name, taxon_valid_name) %>%
-    dplyr::summarise(n_individuals = n())%>%
-      left_join(.,invert_transect_area, by  = "ps_site_id") %>%
-  as.data.frame()
-# Can't seem to pipe the damn density!!!
-invert_leg1_avg_by_site$area_m2<-as.numeric(invert_leg1_avg_by_site$area_m2)
-invert_leg1_avg_by_site$ind_m2<-invert_leg1_avg_by_site$n_individuals/invert_leg1_avg_by_site$area_m2
+   complete(nesting(ps_site_id, ps_station_id),
+           nesting(taxa, phylum,class, order, family,genus,species, common_name),
+           fill = list(count = 0,
+                       size_cm  = 0)) %>%
+      right_join(.,invert_transect_area, by  = "ps_site_id") %>%
+    group_by(ps_site_id , common_name, taxa, area_m2) %>%
+    dplyr::summarise(n_individuals = sum(count))%>%
+  mutate(ind_m2 = n_individuals/area_m2)
 
-
-invert_leg1_avg_by_station <- invert2 %>% 
+# taxa by station
+invert_leg1_density_taxa_by_station <- invert2 %>% 
   filter(transect != "Off") %>%
    filter(leg == "leg 1") %>%
+   complete(nesting(ps_site_id, ps_station_id),
+           nesting(taxa, phylum,class, order, family,genus,species, common_name),
+           fill = list(count = 0,
+                       size_cm  = 0)) %>%
   group_by(ps_station_id, common_name, taxa) %>%
-  dplyr::summarise(n_individuals = n())%>%
+  dplyr::summarise(n_individuals = sum(count))%>%
   group_by(ps_station_id, common_name, taxa, n_individuals) %>%
-  dplyr::summarise(ind_m2 = n_individuals/50)
+  dplyr::summarise(ind_m2 = n_individuals/50) %>%
+  left_join(stations$inverts[,c("ps_station_id","exp_id","region","subregion","locality","habitat","exposure","diver","depth_m", "depth_strata")])
 
-### Giant Clams and Sea Cucumnbers to merge Leg1 and Leg 2
-resource_inverts_avg_by_site<-raw_cleaned_inverts %>%
-    filter(common_name == "Giant clams" | common_name == "Sea cucumber" & transect != "Off") %>%
-  group_by(leg, ps_site_id, common_name)%>%
-   dplyr::summarise(n_individuals = n()) %>%
-  left_join(invert_transect_area, by = "ps_site_id")%>%
-  mutate(ind_m2 = round(n_individuals/area_m2,2))
 
+
+### Mean size for measured resource inverts
+resource_mean_size_subregion<-invert2 %>%
+ filter(!is.na(size_cm)) %>%
+  group_by(subregion,taxa)%>%
+   dplyr::summarise(n_individuals = n(), mean_shell_length = mean(size_cm), sd=sd(size_cm)) 
+
+
+```
+
+## RData Output
+
+```{r}
 
 # renaming main file 
-raw_cleaned_inverts<-invert2
+invert_observations<-invert2[,c("exp_id","ps_site_id","ps_station_id", "divers", "depth_m","transect","taxa", "count","size_cm","family","common_name","resource_invert","iucn_status","notes" )]
 
 
-save(invert_leg1_avg_by_site, invert_leg1_avg_by_station, resource_inverts_avg_by_site,invert_taxa_table, raw_cleaned_inverts,invert_transect_area, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/invert/PNG_2024_uvs_invert.RData")
+save(invert_leg1_density_by_taxa_by_site, invert_leg1_density_taxa_by_station, resource_mean_size_subregion,invert_taxa_table, invert_observations,invert_transect_area, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/invert/PNG_2024_uvs_invert.RData")
 # 
 
 
