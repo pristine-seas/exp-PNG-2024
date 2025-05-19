@@ -119,8 +119,10 @@ invert<-rbind(leg1_invert, leg2_invert3)
 
 ### Taxonomy Cleaning
 
+This will capture/link the taxonomic information beyond species - to phylum - for each observations. There tend to be a lot of misspellings that need to first be corrected.
+
 ```{r}
-# creating column with the c.f species and sp.
+# creating column with the c.f species and sp. since need to remove this from their names in order to run through the taxonomy. But this will be the record for these names.
 invert<- invert %>%
   mutate(cf_sp = ifelse(str_detect(taxa, "cf") | str_detect(taxa, "sp") ,invert$taxa,""))
 # Adding this to notes colums
@@ -222,12 +224,17 @@ taxonomy_worms$species<-ifelse(taxonomy_worms$species == T,taxonomy_worms$taxon_
 # are there any differences or do they all match up?
 setdiff(invert$taxa, taxonomy_worms$taxon_valid_name)
 
+# once cleaned, joining the full taxonomy back to the main df
 invert2<-left_join(invert, taxonomy_worms, by = c("taxa"="taxon_valid_name"))
 
 
 ```
 
-#### Adding Common Name
+#### Adding Common Name and Resource Column
+
+Common names are easier to communicate to the general public so we add them to the df. Mostly they are broad and general, however, if there are species or groups of interest, we will assign them their distinct common name.
+
+Additionally adding resource column based on whether the organism is fishing either commercially or locally. This may change based on places but the overall identification of these was taken from SPC files - Assessing Tropical Marine Invertebrates
 
 ```{r}
 
@@ -304,6 +311,8 @@ invert2<- invert2 %>%
 
 #### Creating Taxa Table and Adding IUCN Data
 
+This will create a separate taxa table with the full taxonomy, common names, resource and whether it's on the IUCN redlist. The IUCN redlist information will also be tied back to the main df.
+
 ```{r}
 # taking unique taxa to create Taxa Table
 invert_taxa_table<-unique(invert2[,c("common_name", "phylum","class","order","family","genus","species","taxa","resource_invert")])
@@ -356,6 +365,8 @@ invert2<-left_join(invert2, iucn_result, by = "species")
 
 ### Calculating Transect areas
 
+Surveyed areas differed between the two legs and not every site had two transects. Thus for density calculations, need to tie back the correct area to the sites. This is also producing a df of the transect size to be used to support density calculations beyond site level.
+
 ```{r}
 # Leg 1
 # Need to get area values by Leg because methods and area were not consistent.
@@ -399,10 +410,11 @@ invert_transect_area<-rbind(leg1_transect_area, leg2_transect_area) %>%
 
 ```{r}
 invert2$size_cm<-as.numeric(invert2$size_cm)
-# Getting the average taxa by site
+#  average taxa by site
 invert_leg1_density_by_taxa_by_site <- invert2 %>% 
   filter(transect != "Off") %>%
   filter(leg == "leg 1") %>%
+  # need to add zeros to the taxa to support density calculations when data is pooled to strata, subregion, habitat etc.
    complete(nesting(ps_site_id, ps_station_id),
            nesting(taxa, phylum,class, order, family,genus,species, common_name),
            fill = list(count = 0,
@@ -412,7 +424,7 @@ invert_leg1_density_by_taxa_by_site <- invert2 %>%
     dplyr::summarise(n_individuals = sum(count), sd = sd(count))%>%
   mutate(ind_m2 = n_individuals/area_m2)
 
-# taxa by station
+# average taxa by station
 invert_leg1_density_taxa_by_station <- invert2 %>% 
   filter(transect != "Off") %>%
    filter(leg == "leg 1") %>%
