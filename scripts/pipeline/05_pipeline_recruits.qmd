@@ -13,8 +13,6 @@ rm(list = ls())
 library(tidyverse)
 library(stringi)
 library(stringr)
-library(EcolUtils)
-library(data.table)
 library(readxl)
 library(rredlist) # need to get an API to run
 library(taxize)
@@ -50,6 +48,16 @@ recruit<-recruit %>% mutate(region = if_else(subregion %in% c( "Mussau", "Emirau
 recruit<-recruit[,c("exp_id","region","subregion", "ps_site_id","ps_station_id", "Transect","Depth", "Quadrats","Genus","Size_cm", "Observer" )]
 # renaming some
 names(recruit) <- c("exp_id","region","subregion", "ps_site_id","ps_station_id", "transect","depth_m","quadrats", "genus","size_cm", "observer" )
+
+
+###### Subregion names are not the same as Juan's. Modifyinh.
+sites<-readRDS("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/sites.rds")
+sites_uvs<-sites$uvs
+
+recruit$subregion<-NULL
+recruit<-recruit %>%
+  left_join(sites_uvs[,c("ps_site_id","subregion")], by = "ps_site_id")
+recruit<-recruit[,c("exp_id","region","subregion", "ps_site_id","ps_station_id", "transect","depth_m","quadrats", "genus","size_cm", "observer" )]
 
 
 ```
@@ -124,7 +132,7 @@ recruit2 <- recruit2[,c("exp_id","region","subregion", "ps_site_id","ps_station_
 
 ```
 
-## UVS recruits - Densities
+### Site areas by quadrats
 
 ```{r}
 
@@ -143,55 +151,63 @@ quads<-recruit2 %>%
    mutate(one=replace_na(one, "two"))
 
 quads$area_m2<-ifelse(quads$one == "two" & quads$quadrats == 10, 20*.25, quads$quadrats )
-quads$area_m2<-ifelse(quads$one == "two" & quads$quadrats == 6, 16*.25, quads$area)
+quads$area_m2<-ifelse(quads$one == "two" & quads$quadrats == 6, (16*.25), quads$area_m2)
 quads$area_m2<-ifelse(quads$one == "one" & quads$quadrats == 10, 10*.25, quads$area_m2)
 
-quads_dens<-quads[,c("ps_site_id","area_m2")]
+quads_dens<-quads[,c("ps_site_id","quadrats", "area_m2")]
 
-#Density file
+
 recruit_quad_area_by_site<-quads_dens %>%
   left_join(.,unique(recruit2[,c("region","subregion","ps_site_id")]), by = "ps_site_id") %>%
   na.omit
 
 
 
+```
 
+### Densities calculations and export
+
+```{r}
+#### By Station for Genus and Family
 recruit_density_by_station_genus <- recruit2 %>% 
   mutate(count = 1)%>%
   group_by(ps_site_id, genus, depth_m, quadrats) %>%
-  dplyr::summarise(count = sum(count)) %>%
-  dplyr::summarise(count=count,ind_m2 = round((count/(quadrats*0.25)),2))
+  dplyr::reframe(count = sum(count),ind_m2 = round((count/(quadrats*0.25)),2), mean_size_cm =mean(size_cm)) %>%
+  distinct()
 
 
 recruit_density_by_station_family <- recruit2 %>% 
   mutate(count = 1)%>%
   group_by(ps_site_id, family, depth_m, quadrats) %>%
-  dplyr::summarise(count = sum(count)) %>%
-  dplyr::summarise(count = count, ind_m2 = round((count/(quadrats*0.25)),2))
-
-
+  dplyr::reframe(count = sum(count), ind_m2 = round((count/(quadrats*0.25)),2),mean_size_cm =mean(size_cm)) %>%
+  distinct()
+  
+#### By Site for Genus and Family
 recruit_density_by_site_genus <- recruit2 %>% 
   mutate(count = 1) %>%
   group_by(ps_site_id, genus) %>%
-  dplyr::summarise(count = sum(count)) %>%
+  dplyr::summarise(count = sum(count), mean_size_cm =round(mean(size_cm),2)) %>%
   left_join(.,quads_dens, by = "ps_site_id", relationship = "many-to-many") %>%
   group_by(ps_site_id, genus) %>%
-  dplyr::summarise( count = count,ind_m2 = round((count/amount),2))
+  dplyr::reframe( count = count, ind_m2 = round((count/area_m2),2),mean_size_cm =mean_size_cm) %>%
+  distinct()
 
 
 recruit_density_by_site_family <- recruit2 %>% 
   mutate(count = 1)%>%
   group_by(ps_site_id, family) %>%
-  dplyr::summarise(count = sum(count)) %>%
+  dplyr::summarise(count = sum(count),mean_size_cm =round(mean(size_cm),2)) %>%
  left_join(quads_dens, by = "ps_site_id", relationship = "many-to-many") %>%
   group_by(ps_site_id, family) %>%
-  dplyr::summarise(count = count, ind_m2 = round((count/amount),2))
+  dplyr::reframe(count = count, ind_m2 = round((count/area_m2),2),mean_size_cm =mean_size_cm)%>%
+  distinct()
 
-raw_cleaned_recruits<-recruit2
 
-save(recruit_density_by_station_genus, recruit_density_by_station_family, recruit_quad_area_by_site, recruit_density_by_site_genus, recruit_density_by_site_family, raw_cleaned_recruits, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/recruits/PNG_2024_uvs_recruit.RData")
+### Observation file
+recruit_observations<-recruit2
 
-#save(recruit_density_by_station_genus, recruit_density_by_station_family, recruit_density_by_site_genus, recruit_density_by_site_family, raw_cleaned_recruits,  file = "PNG_2024_uvs_recruit.RData")
+save(recruit_density_by_station_genus, recruit_density_by_station_family, recruit_quad_area_by_site, recruit_density_by_site_genus, recruit_density_by_site_family, recruit_observations, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/recruits/PNG_2024_uvs_recruit.RData")
+
 
 
 ```
