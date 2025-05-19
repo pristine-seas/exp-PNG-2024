@@ -25,6 +25,8 @@ setwd("~/Documents/PS eDNA/PNG_2024/")
 
 ### File Cleaning
 
+Modifying the fieldbook to follow the new standard labeling practices
+
 ```{r}
 recruit<-read_excel("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/raw/benthos/PNG_2024_recruits_fieldsheet_MT.xlsx", sheet = 1)
 
@@ -63,6 +65,8 @@ recruit<-recruit[,c("exp_id","region","subregion", "ps_site_id","ps_station_id",
 ```
 
 ### Taxonomy Cleaning
+
+Cleaning up the genus names and adding the families
 
 ```{r}
 ## Apparently the ? was throwing off the functions
@@ -134,6 +138,8 @@ recruit2 <- recruit2[,c("exp_id","region","subregion", "ps_site_id","ps_station_
 
 ### Site areas by quadrats
 
+Not all sites had an equal number of transects or quadrats. Thus creating a df that will capture this information when needed.
+
 ```{r}
 
 # One depth sites
@@ -157,42 +163,40 @@ quads$area_m2<-ifelse(quads$one == "one" & quads$quadrats == 10, 10*.25, quads$a
 quads_dens<-quads[,c("ps_site_id","quadrats", "area_m2")]
 
 
-recruit_quad_area_by_site<-quads_dens %>%
-  left_join(.,unique(recruit2[,c("region","subregion","ps_site_id")]), by = "ps_site_id") %>%
-  na.omit
-
-
-
 ```
 
-### Densities calculations and export
+### Densities calculations 
+
+Calculating the recruit densities by genus and family along with mean sizes for genus and family by both station and site.
 
 ```{r}
-#### By Station for Genus and Family
+#### By Station for Genus 
 recruit_density_by_station_genus <- recruit2 %>% 
   mutate(count = 1)%>%
   group_by(ps_site_id, genus, depth_m, quadrats) %>%
   dplyr::reframe(count = sum(count),ind_m2 = round((count/(quadrats*0.25)),2), mean_size_cm =mean(size_cm)) %>%
   distinct()
 
-
+#### By Station for Family 
 recruit_density_by_station_family <- recruit2 %>% 
   mutate(count = 1)%>%
   group_by(ps_site_id, family, depth_m, quadrats) %>%
   dplyr::reframe(count = sum(count), ind_m2 = round((count/(quadrats*0.25)),2),mean_size_cm =mean(size_cm)) %>%
   distinct()
   
-#### By Site for Genus and Family
+#### By Site for Genus 
 recruit_density_by_site_genus <- recruit2 %>% 
   mutate(count = 1) %>%
+  
   group_by(ps_site_id, genus) %>%
   dplyr::summarise(count = sum(count), mean_size_cm =round(mean(size_cm),2)) %>%
   left_join(.,quads_dens, by = "ps_site_id", relationship = "many-to-many") %>%
   group_by(ps_site_id, genus) %>%
   dplyr::reframe( count = count, ind_m2 = round((count/area_m2),2),mean_size_cm =mean_size_cm) %>%
-  distinct()
+  distinct() %>%
 
 
+#### By Site for Family
 recruit_density_by_site_family <- recruit2 %>% 
   mutate(count = 1)%>%
   group_by(ps_site_id, family) %>%
@@ -203,11 +207,21 @@ recruit_density_by_site_family <- recruit2 %>%
   distinct()
 
 
-### Observation file
+```
+
+### Exporting data
+
+```{r}
+
+### Including observation df along with the densities files and area files
 recruit_observations<-recruit2
 
+### Including quadrat area df by site for additional calculations
+recruit_quad_area_by_site<-quads_dens %>%
+  left_join(.,unique(recruit2[,c("region","subregion","ps_site_id")]), by = "ps_site_id") %>%
+  na.omit
+
+
 save(recruit_density_by_station_genus, recruit_density_by_station_family, recruit_quad_area_by_site, recruit_density_by_site_genus, recruit_density_by_site_family, recruit_observations, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/recruits/PNG_2024_uvs_recruit.RData")
-
-
 
 ```
