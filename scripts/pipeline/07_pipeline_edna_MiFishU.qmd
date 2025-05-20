@@ -57,10 +57,6 @@ filter (! class %in% c("Insecta","Arachnida")) %>%
 # Checking what was removed
 mifish_remove<-anti_join(df_mifish, df_mifish2)
 
-
-# Adding class to sea turtles
-df_mifish2$class<-ifelse(df_mifish2$order == "Testudines", "Reptilia", df_mifish2$class)
-
 # No need for domain
 df_mifish2$domain<-NULL
 
@@ -147,6 +143,15 @@ mean(seqTotalCheck_mifish$EukBactProt)
 
 #### Abundance Filtration
 
+
+To filter or not to filter, that is the question.....
+
+Pros: Removes spurious low quantity of sequences that may arguably not be a part of the samples. There are lots of technical constraints that inflate the presence of sequences that would not be in your samples. These include: tag jumping, contamination from lab work, etc. Consider using if you have a large difference in sequencing depth across samples - especially for Invertebrate markers - and if you find low numbers of sequences from OTUs in your negatives and in contrast find a high number of sequences of the same OTU in your samples. Similarly, if you find you have a large number of sequences and OTUs in your negatives that are present in the real samples suggesting quite a bit of contamination, then this should be done more stringently (a higher removal value) or you should consider resequencing your samples.
+
+Cons: Could remove real sequence/organismal presence within your samples and it could remove rare species. If you are trying to detect the presence of rare species such as endangered species, don't use. In fact, if the goal of the project is species detection of any kind, skip this step.
+
+Here we filter.
+
 ```{r}
 
 abun_mifish<-as.data.frame(neg_mifish[,2:ncol(neg_mifish)])
@@ -178,6 +183,9 @@ whole_mifish2 <- whole_mifish2 %>% select("OTU", everything())
 ```
 
 ###### Investigating Abundance Filtration results
+
+This can help you gauge what filtration amount is reasonable given the technical constraints from the sequencer and/or contamination that could be in your sample. Based on some exploration of this, we chose 0.0001 (0.01%) in our abundance filtration code.
+
 
 ```{r}
 ##### What am I missing?
@@ -229,6 +237,14 @@ removed_species_names2<-left_join(removed_species_names, df_meta, by =  "species
 
 
 #### Collapsing Taxonomic Data
+
+To keep or not to keep ASVs, that is the question
+
+Pros: Removes duplicated taxonomic identifications. Takes a conservative approach to biodiversity questions. zOTUs/ASVS are now more on a OTU type scale based on "taxonomy" rather than sequencing.
+
+Cons: Duplicate IDs could be congeners without barcodes so collapseing would loose this "diversity". But this approach also tends to inflate diversity as it's more of a sequence approach based rather taxonomic.
+
+Here we collapse data
 
 ```{r}
 # If choose not to do abundance filtration, then switch whole_df with neg_df
@@ -282,6 +298,14 @@ collapse_mifish<- collapse_mifish %>% filter(!family == "" | !order == "")
 ```
 
 #### Rarfeying
+
+To rarefying or not to rarefy...that is the question
+
+Pros: Justifies comparisons across samples. A general principle of standard biodiversity surveys is that you will see more organisms the more you sample. The same is with sequencing. The samples with a deeper sequencing depth will have more "organisms". Thus, if you have interests comparing across sites, gradients, markers, etc. this should be done. In the marker comparison approach, in theory all markers should be rarefied to the same sequencing depth before evaluating their performance to make the "evaluation playing field" equal.
+
+Cons: You may loose real taxa in some samples. However, you loose less when you collapse the taxa first.
+
+Here we rarefy...
 
 ```{r}
 
@@ -449,6 +473,9 @@ sequence_data[remove_col]<-NULL
 
 cleaned_data<-left_join(cleanTaxa_take4, sequence_data, by = "OTU")
 
+# Adding class to sea turtles
+cleaned_data$class<-ifelse(cleaned_data$order == "Testudines", "Reptilia", cleaned_data$class)
+
 ```
 
 
@@ -555,9 +582,21 @@ cleaned_data2<-cleaned_data2 %>% select(c("PNG"), everything())
 
 # Fishbase metadata
 
-#### Fishbase Distributions
+#### Fishbase Distributions and Habitats
 
-This is grabbing fishbase geographical locations for fish taxa to see whether the remaining fish species not found in the locational database in country's EEZ recorded in the western and central Pacific.
+This is grabbing fishbase geographical locations for fish taxa to help determine whether these species are known from the geographical area, at least the Pacific. If not, then the sequence is most likey a congener. This process also extrapolates what habitat the species live in - for fishbase habitats are split into 7 primary marine habitats:
+
+1) Bathydemersal (living and feeding on the sea bed at depths below 200m), 
+2) Bathypelagic (living and feeding in open water depths below 200m), 
+3) Benthopelagic (foraging across benthic and pelagic habitats), 
+4) Demersal (living and feeding near the sea bed shallower than 200m and not reef-associated),
+5) Pelagic-neritic (living and feeding in the pelagic zone above a continental shelf),
+6) Pelagic-oceanic (living and feeding in the pelagic zone of the open ocean) 
+7) Reef-associated (living and feeding on a wave resistant feature the upper surface of which is within 0–20m of the ocean surface).
+
+Sometimes we get freshwater species and thus I create an all encompassing
+8) Brackish (estuarine, river, mangrove...)
+
 
 ```{r}
 
@@ -618,7 +657,9 @@ cleaned_data3$species<-ifelse(cleaned_data3$FAO == "Congener",
 
 ```
 
-#### Fishbase Habitat
+#### Fishbase Habitat - continued
+
+Many OTUs are not identified to species, thus I assigned all OTUs identified to at lease family to a habitat unless it's unknown because the family is so mixed, like Carangidae which become unknown. Any OTU ID to order and above are thrown into an unknown category.
 
 ```{r}
 
@@ -665,7 +706,9 @@ cleaned_data4$DemersPelag<-NULL
 
 ```
 
-# Fish Trophic
+# Fish Trophic and Common Family Names
+
+Here I'm adding whatever trophic data we currently have for the fish species. I then assigned a common family name to those that are not present in our internal working fish trophic document. I extend common names to everything that's not a fish as well.
 
 ```{r}
 trophic<-read.csv("~/Google Drive/My Drive/Pristine Seas/SCIENCE/datasets/ps-taxa-lists/Cleaned_AllFish_20240130.csv")
@@ -744,11 +787,19 @@ unique(commonRemain$family)
 
 ```
 
-# Cleaned MiFish
+# Cleaned MiFishE
+
+With the cleaned file, making seperate files of the whole dataset to be applied towards exploration. 
 
 ```{r}
 
-working<-trophic4
+# All non fish and sharks indentified to species are not in species columns because they were removed when dataframe went into fishbase. Need to add them. Going to do that by creating the species columns again based on taxa 
+
+working<-trophic4 
+  working$species<-str_count(working$taxa, " ") > 0
+working$species<-ifelse(working$species == T,working$taxa,"" )
+# because some of the OTUs have numbers as entered in NCBI, don't want them in the species so removing those from the species column
+working$species<-ifelse(!grepl("[[:digit:]]", working$species) == T, working$species, "")
 working <- select(working, OTU,common_family, phylum,class,order,family,genus,species,taxa,PNG,zotu_All,Fresh,FAO,Status, habitat_fishbase,consumer,trophic_group,detailed_trophic_group, iucn_status, everything())
 
 
@@ -778,7 +829,7 @@ taxa_and_metadata_by_site<-working
 save(taxa_and_metadata_by_site, otu_table, samples_metadata_data_table,taxa_table, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_edna_MifishU.RData")
 
 
-write.csv(working, "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_Leg2_taxa_by_site_MifishU.csv", row.names = F)
+#write.csv(working, "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_Leg2_taxa_by_site_MifishU.csv", row.names = F)
 
 
 ```
