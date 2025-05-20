@@ -59,10 +59,6 @@ filter (! class %in% c("Insecta","Arachnida")) %>%
 # Checking what was removed
 mifish_remove<-anti_join(df_mifish, df_mifish2)
 
-
-# Adding class to sea turtles
-df_mifish2$class<-ifelse(df_mifish2$order == "Testudines", "Reptilia", df_mifish2$class)
-
 # No need for domain
 df_mifish2$domain<-NULL
 
@@ -160,7 +156,7 @@ Pros: Removes spurious low quantity of sequences that may arguably not be a part
 
 Cons: Could remove real sequence/organismal presence within your samples and it could remove rare species. If you are trying to detect the presence of rare species such as endangered species, don't use. In fact, if the goal of the project is species detection of any kind, skip this step.
 
-Here we filter and choose the 
+Here we filter.
 
 ```{r}
 
@@ -208,6 +204,8 @@ whole_mifish2 <- whole_mifish2 %>% select("OTU", everything())
 ```
 
 ###### Investigating Abundance Filtration results
+
+This can help you gauge what filtration amount is reasonable given the technical constraints from the sequencer and/or contamination that could be in your sample. Based on some exploration of this and the known endemic contaminates, we chose 0.0005 (0.05%) in our abundance filtration code.
 
 ```{r}
 ##### What am I missing?
@@ -533,6 +531,10 @@ sequence_data[remove_col]<-NULL
 
 cleaned_data<-left_join(cleanTaxa_take4, sequence_data, by = "OTU")
 
+# Adding class to sea turtles
+cleaned_data$class<-ifelse(cleaned_data$order == "Testudines", "Reptilia", cleaned_data$class)
+
+
 ```
 
 
@@ -852,7 +854,15 @@ With the cleaned file, making seperate files of the whole dataset to be applied 
 
 ```{r}
 
-working<-trophic4
+# All non fish and sharks indentified to species are not in species columns because they were removed when dataframe went into fishbase. Need to add them. Going to do that by creating the species columns again based on taxa 
+
+working<-trophic4 
+  working$species<-str_count(working$taxa, " ") > 0
+working$species<-ifelse(working$species == T,working$taxa,"" )
+# because some of the OTUs have numbers as entered in NCBI, don't want them in the species so removing those from the species column
+working$species<-ifelse(!grepl("[[:digit:]]", working$species) == T, working$species, "")
+
+
 working <- select(working, OTU,common_family, phylum,class,order,family,genus,species,taxa,PNG,zotu_All,Fresh,FAO,Status, habitat_fishbase,consumer,trophic_group,detailed_trophic_group, iucn_status, everything())
 
 
@@ -879,7 +889,7 @@ otu_table$PNG<-NULL
 #### Everything together
 taxa_and_metadata_by_site<-working
 
-#save(taxa_and_metadata_by_site, otu_table, samples_metadata_data_table,taxa_table, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_edna_MifishE.RData")
+save(taxa_and_metadata_by_site, otu_table, samples_metadata_data_table,taxa_table, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_edna_MifishE.RData")
 
 #write.csv(working, "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_Leg1_taxa_by_site_MifishE.csv", row.names = F)
 
