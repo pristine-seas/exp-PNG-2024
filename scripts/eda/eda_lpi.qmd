@@ -165,6 +165,18 @@ n_strata    <- length(unique(lpi_stations$depth_strata))
 n_regions   <- length(unique(lpi_stations$region))
 n_habitats  <- length(unique(lpi_stations$habitat))
 n_exposures <- length(unique(lpi_stations$exposure))
+
+region_summary <- lpi_stations |> 
+  group_by(region) |> 
+  summarise(n_sites = n_distinct(ps_site_id),
+            n_stations = n_distinct(ps_station_id),
+            .groups = "drop")
+
+subregion_summary <- lpi_stations |> 
+  group_by(region, subregion) |> 
+  summarise(n_sites = n_distinct(ps_site_id),
+            n_stations = n_distinct(ps_station_id),
+            .groups = "drop")
 ```
 
 We sampled `r n_sites` unique reef sites, comprising `r n_stations` individual transect stations, spanning four distinct regions — `r region_list` — across gradients of depth, exposure, and habitat. Surveys were conducted by `r n_divers` divers across `r n_strata` depth strata and spanned a diverse set of environments: `r n_regions` regions, `r n_habitats` habitat types, and `r n_exposures` exposure categories. This broad sampling design supports a robust comparison of benthic communities across environmental gradients and geographic locations.
@@ -341,7 +353,8 @@ Field morphotaxa were consolidated to their lowest defensible taxonomic rank bas
 ```{r}
 #| label: tbl-morphotaxa-by-func
 #| tbl-cap: "Summary of morphotaxa by functional group and lowest defensible taxonomic rank"
-#| 
+
+
 sum_func_rank <- lpi_morphotaxa |> 
   group_by(functional_group, rank) |> 
   summarize(n_morphotaxa = n_distinct(morphotaxon),
@@ -397,6 +410,28 @@ We examine variation in richness across environmental gradients (region, depth, 
 
   - How does morphotaxon richness vary across regions, habitats, exposures, and depth strata?
   - Are some regions consistently more taxonomically rich than others?
+
+```{r}
+lpi_observations <- lpi_observations |> 
+  left_join(lpi_stations |> 
+              select(ps_station_id, region, subregion), 
+            by = "ps_station_id")
+
+station_summary <- lpi_observations |> 
+  group_by(region, subregion, ps_station_id) |> 
+  summarize(n_morpho = n_distinct(morphotaxon[contacts > 0])) |> 
+  arrange(ps_station_id)
+
+subregion_summary <- subregion_summary |> 
+  left_join(lpi_observations |> 
+               group_by(region, subregion) |> 
+               summarize(n_morpho = n_distinct(morphotaxon[contacts > 0])))
+
+region_summary <- region_summary |> 
+  left_join(lpi_observations |> 
+              group_by(region) |> 
+              summarize(n_morpho = n_distinct(morphotaxon[contacts > 0])))
+```
 
 ## Patterns
 
@@ -930,11 +965,13 @@ Shifting to a broader ecological scale, we characterize benthic community struct
 
 # 1. Get average cover by functional group and subregion
 
-func_cover_by_station <- cover_by_station_and_taxa |> 
-  group_by(ps_station_id, functional_group) |> 
-  summarize(contacts = sum(contacts), .groups = "drop") |> 
-  group_by(ps_station_id) |> 
-  mutate(pct_cover = round(contacts / sum(contacts) * 100, 3)) 
+func_cover_by_station <- cover_by_station_and_taxa %>%
+  group_by(ps_station_id, functional_group) %>%
+  summarize(contacts = sum(contacts), .groups = "drop") %>%
+  group_by(ps_station_id) %>%
+  mutate(pct_cover = round(contacts / sum(contacts) * 100, 3)) %>%
+  ungroup() %>%
+  complete(ps_station_id, functional_group, fill = list(contacts = 0, pct_cover = 0))
   
 func_cover_by_subregion <- func_cover_by_station |> 
   left_join(lpi_stations |> 
@@ -966,7 +1003,7 @@ func_cover_by_subregion |>
 #| fig-cap: "**Average Cover by Functional Group and Region**"
 #| fig-width: 8
 #| fig-height: 7
-#| 
+
 func_cover_by_region <- func_cover_by_station |> 
   left_join(lpi_stations |> 
               distinct(ps_station_id, region, subregion)) |> 
@@ -974,7 +1011,7 @@ func_cover_by_region <- func_cover_by_station |>
   summarize(n_stations =  n_distinct(ps_station_id),
             avg_cover = mean(pct_cover, na.rm = TRUE), .groups = "drop") |> 
   mutate(functional_group = factor(functional_group, levels = functional_group_order),
-         label_pct = paste0(round(avg_cover, 1), "%"))
+         label_pct = paste0(round(avg_cover, 0), "%"))
 
 # Pie chart by region with percent labels
 
@@ -984,7 +1021,7 @@ func_cover_by_region |>
   ggplot(aes(x = "", y = avg_cover, fill = functional_group)) +
   geom_col(width = 1, color = "white") +
   coord_polar(theta = "y") +
-  facet_wrap(~region, ncol = 2) +
+  facet_wrap(~region, ncol = 4) +
   scale_fill_manual(values = functional_palette) +
   geom_text(aes(label = ifelse(avg_cover > 4, label_pct, "")),  # hide labels < 4% for clarity
             position = position_stack(vjust = 0.5),
@@ -1004,6 +1041,64 @@ func_cover_by_region |>
         legend.title = element_text(face = "bold"),
         legend.key.size = unit(0.4, "cm"),
         legend.text = element_text(size = 11))
+```
+
+```{r}
+func_cover_pie <- func_cover_by_region |> 
+  mutate(func_group = if_else(functional_group %in% c("hard coral", "cca", "cyanobacteria"), functional_group, "other"),
+         func_group = factor(func_group, levels = c("hard coral", "cca", "cyanobacteria", "other")),
+         transparency = if_else(func_group == "other", 0.6, 1),
+         label_pct = if_else(func_group == "other" | avg_cover < 5, NA_character_, label_pct)) |> 
+  ggplot(aes(x = "", y = avg_cover, fill = func_group)) +
+  geom_col(aes(alpha = transparency), show.legend = F, width = 1)+
+  coord_polar(theta = "y") +
+  facet_wrap(~region, ncol = 4)+
+  theme_void()+
+  scale_fill_manual(values = c("hard coral"   = "#EA9E8D",
+                               "cca"           = "#F1B6DA",
+                               "cyanobacteria" = "#000000", 
+                               "other"         = "grey"))+
+  geom_text(aes(label = label_pct),  # hide labels < 4% for clarity
+            position = position_stack(vjust = 0.5),
+            size = 3,
+            color = "white")
+
+library(patchwork)
+
+# build a little patch: your plot on top, blank underneath
+top_aligned <- func_cover_pie +
+  plot_spacer() +
+  plot_layout(ncol = 1, heights = c(1, 3))
+
+ggsave(plot     = top_aligned,
+       filename = file.path(exp_path, "figures", "func_cover_pie.pdf"),
+       width    = 10,
+       height   = 10)
+```
+
+
+```{r}
+station_summary <- lpi_stations |> 
+  select(exp_id, region, subregion, locality, ps_site_id, ps_station_id, depth_strata, depth_m, diver, habitat, exposure, n_sections, n_pts) |> 
+  left_join(station_summary) |> 
+  left_join(func_cover_by_station |> 
+              select(ps_station_id, functional_group, pct_cover) |>
+              pivot_wider(names_from = functional_group, values_from = pct_cover, values_fill = 0, names_prefix = "pct_") |> 
+              janitor::clean_names())
+
+subregion_summary <- subregion_summary |> 
+  left_join(func_cover_by_subregion |> 
+              select(subregion, functional_group, avg_cover) |>
+              mutate(avg_cover = round(avg_cover, 2)) |> 
+              pivot_wider(names_from = functional_group, values_from = avg_cover, values_fill = 0, names_prefix = "pct_") |> 
+              janitor::clean_names())
+
+region_summary <- region_summary |> 
+  left_join(func_cover_by_region |> 
+              select(region, functional_group, avg_cover) |>
+              mutate(avg_cover = round(avg_cover, 2)) |> 
+              pivot_wider(names_from = functional_group, values_from = avg_cover, values_fill = 0, names_prefix = "pct_") |> 
+              janitor::clean_names())
 ```
 
 #### PERMANOVA
@@ -1465,6 +1560,14 @@ bleaching_by_subregion <- bleaching_by_station |>
          bleached_coral_cover = avg_pct_coral * (avg_pct_bleached_pct / 100))
 
 # Step 3: Overall bleaching summary
+bleaching_by_region <- bleaching_by_station |>
+  group_by(region) |>
+  summarise(n_stations   = n(),
+            mean_bleach  = mean(pct_bleached, na.rm = TRUE),
+            median_bleach = median(pct_bleached, na.rm = TRUE),
+            max_bleach   = max(pct_bleached, na.rm = TRUE),
+            pct_stations = round(100 * n_stations / nrow(lpi_stations)))
+
 bleaching_sum <- bleaching_by_station |>
   summarise(n_stations   = n(),
             mean_bleach  = mean(pct_bleached, na.rm = TRUE),
@@ -1473,7 +1576,7 @@ bleaching_sum <- bleaching_by_station |>
             pct_stations = round(100 * n_stations / nrow(lpi_stations)))
 ```
 
-Bleaching was observed at `r bleaching_sum$n_stations` stations, representing approximately `r bleaching_sum$pct_stations`% of all surveyed sites. Across these stations, the average bleaching prevalence was `r round(bleaching_sum$mean_bleach, 1)` %, while the median bleaching was lower at `r round(bleaching_sum$mean_bleach, 1)` %. Bleaching severity varied widely, ranging from 0% at some sites to as high as `r round(bleaching_sum$max_bleach, 1)`% at others.
+Bleaching was observed at `r bleaching_sum$n_stations` stations, representing approximately `r bleaching_sum$pct_stations`% of all surveyed sites. Across these stations, the average bleaching prevalence was `r round(bleaching_sum$mean_bleach, 1)` %, while the median bleaching was lower at `r round(bleaching_sum$median_bleach, 1)` %. Bleaching severity varied widely, ranging from 0% at some sites to as high as `r round(bleaching_sum$max_bleach, 1)`% at others.
 
 ```{r}
 #| label: fig-bleaching-station-interactive
@@ -1524,6 +1627,118 @@ p <- bleaching_interactive |>
 ggplotly(p, tooltip = "text") |> 
   layout(legend = list(orientation = "h", x = 0.3, y = -0.2))
 ```
+
+```{r}
+station_summary <- station_summary |> 
+  left_join(bleaching_by_station |> 
+              mutate(pct_bleached = round(pct_bleached, 2)) |> 
+              select(ps_station_id, pct_bleached), 
+            by = "ps_station_id") 
+
+subregion_summary <- subregion_summary |> 
+  left_join(bleaching_by_subregion |> 
+              mutate(avg_pct_bleached_pct = round(avg_pct_bleached_pct, 2)) |> 
+              select(region, subregion, pct_bleached = avg_pct_bleached_pct), 
+            by = c("region", "subregion"))
+
+region_summary <- region_summary |> 
+  left_join(bleaching_by_region |> 
+              select(region, pct_bleached = mean_bleach))
+
+save(lpi_station_summary = station_summary, 
+          lpi_subregion_summary = subregion_summary,
+          lpi_region_summary = region_summary,
+     file = file.path(exp_path, "data/primary/output/lpi_summaries.RData"))
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggforce)
+library(tidyr)
+
+# 1. your input table (fractions, not %)
+regions <- tibble(
+  region  = c("Lovongai", "Manus",  "Murat","Western Islands"),
+  min     = c(0.04,      0,       NA,0),
+  avg     = c(0.18,      0.1,      NA, 0.07),
+  max     = c(0.58,      0.87,    NA  , 0.28)
+)
+
+# 2. build the arc‐segment data
+gauge_data <- regions %>%
+  mutate(
+    # for each region, split into filled vs remainder
+    seg = map(avg, ~ tibble(
+      part       = c("bleached", "remaining"),
+      percentage = c(.x, 1 - .x)
+    ))
+  ) %>%
+  select(region, min, avg, max, seg) %>%
+  unnest(seg) %>%
+  group_by(region) %>%
+  mutate(
+    start = lag(percentage, default = 0) * pi,
+    end   = (lag(percentage, default = 0) + percentage) * pi
+  ) %>%
+  ungroup()
+
+# 3. compute min/max label positions (constant angles: π and 0, rotated by π/2)
+label_pos <- regions %>%
+  mutate(angle_min = pi,       # left end of semicircle
+         angle_max = 0,        # right end
+         x_min     = 1 + 0.75 * cos(angle_min - pi/2),
+         y_min     = 1 + 0.75 * sin(angle_min - pi/2),
+         x_max     = 1 + 0.75 * cos(angle_max - pi/2),
+         y_max     = 1 + 0.75 * sin(angle_max - pi/2),
+         lbl_min   = paste0(round(min*100), "%"),
+         lbl_max   = paste0(round(max*100), "%"),
+         lbl_avg   = paste0(round(avg*100), "%"))
+
+# 4. plot with facet_wrap
+gauge_plot <- ggplot(gauge_data) +
+  # background + fill arcs
+  geom_arc_bar(aes(
+    x0    = 1, y0 = 1,
+    r0    = 0.75, r = 1,
+    start = start   - pi/2,
+    end   = end     - pi/2,
+    fill  = part
+  ), show.legend = FALSE) +
+  # min/max labels
+  geom_text(data = label_pos,
+            aes(x = 0.15, y = .93, label = lbl_min),
+            size = 3,  color = "grey30") +
+  geom_text(data = label_pos,
+            aes( x = 1.9, y = .93, label = lbl_max),
+            size = 3, color = "grey30") +
+  # avg % in center
+  geom_text(data = label_pos,
+            aes(x = 1, y = 1.5, label = lbl_avg),
+            size = 6) +
+  # custom colors
+  scale_fill_manual(values = c("remaining" = "#EA9E8D", bleached = "#FFDCCC")) +
+  coord_fixed() +
+  theme_void() +
+  facet_wrap(~region, nrow = 1)+
+  theme(strip.text = element_text(size = 12))
+```
+
+```{r}
+library(patchwork)
+
+lpi_sumary_plot <- func_cover_pie/gauge_plot+
+  theme(
+    strip.text       = element_blank(),
+    strip.background = element_blank(),
+  )
+
+gauge_plot |> 
+  ggsave(filename = file.path(exp_path, "figures/gauge_plot.pdf"),
+         width = 8, height = 4, dpi = 300)
+```
+
 
 #### Higher Coral Cover, Higher Bleaching?
 
@@ -1892,18 +2107,28 @@ func_cover_by_station |>
 
 We modeled cyanobacteria percent cover using a beta regression with a logit link, including region, depth strata, exposure, and habitat as predictors and subregion as a random intercept. Model fit was strong (AIC = –587.7; dispersion parameter = 26.1), and random effects were small (subregion variance = 0.064). Region was the only significant predictor based on model coefficients: cyanobacteria cover was significantly lower in Manus, Murat, and the Western Islands relative to the reference region (Lovongai), with p-values < 0.05. Other predictors (depth strata, exposure, habitat) showed no significant effects.
 
+
+
 ```{r}
 # Filter hard coral cover and join region info
 cyano_cover_station <- func_cover_by_station |> 
   filter(functional_group == "cyanobacteria") |> 
-  left_join(lpi_stations |> distinct(ps_site_id, ps_station_id, region, subregion, depth_strata, exposure, habitat), by = "ps_station_id")
+  left_join(lpi_stations |> 
+              distinct(ps_site_id, ps_station_id, region, subregion, depth_strata, exposure, habitat), 
+            by = "ps_station_id")
 
-# NMuch better stats
+cyano_cover_station <- cyano_cover_station |>
+  mutate(
+    # Apply standard transformation to handle zeros and ones
+    # (y * (n-1) + 0.5) / n where n is sample size
+    n = nrow(cyano_cover_station),
+    transformed_cover = (pct_cover/100 * (n - 1) + 0.5) / n
+  )
 
 library(glmmTMB)
 
 # Beta regression (since % cover is 0-100)
-glmm_cyano <- glmmTMB(pct_cover/100 ~ region + depth_strata + exposure + habitat + (1 | subregion),
+glmm_cyano <- glmmTMB(transformed_cover ~ region + depth_strata + exposure + habitat + (1 | subregion),
                       data = cyano_cover_station,
                       family = beta_family(link = "logit"))
 

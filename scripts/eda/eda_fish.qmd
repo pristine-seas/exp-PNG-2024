@@ -50,6 +50,7 @@ library(scales)
 library(reactablefmtr)
 library(parameters)
 library(tidyverse)
+library(ggdist)
 
 ggthemr::ggthemr("fresh")
 
@@ -77,60 +78,60 @@ sites <- read_rds(file.path(exp_path, "data/primary/processed/sites.rds"))
 
 uvs_sites <- sites$uvs
 
-# Load pre-processed fish data --------------------------------------------
+fish_lut <- tbl(bq_connection, "taxonomy.fish") |> 
+  filter(!is.na(accepted_aphia_id)) |> 
+  collect()
 
-fish_lut <- read_csv(file.path(ps_paths$projects, "prj-legacy-db/data/processed/taxa/taxa_luts.uvs_fish_pacific.csv"),
-                     show_col_types = FALSE) 
+# -- Read fish survey data -----------------------------------------------
 
-load(file = file.path(exp_path, "data", "primary", "processed", "fish", "fish_staging.RData"))
+stations <- tbl(bq_connection, "uvs.blt_stations") |> 
+  filter(exp_id == "PNG_2024") |> 
+  collect()
 
-# Are there any data filters??
+observations <- tbl(bq_connection, "uvs.blt_observations") |> 
+  filter(exp_id == "PNG_2024") |> 
+  collect()
 
-biomass_by_station_and_taxa <- biomass_by_station_and_taxa |> 
-  filter(!str_detect(common_family, "blennie|gobie"))
+biomass_by_taxa_and_station <- tbl(bq_connection, "uvs.blt_biomass_by_taxa") |> 
+  filter(exp_id == "PNG_2024") |> 
+  collect()
 
-biomass_per_obs <- biomass_per_obs |> 
-  filter(!str_detect(common_family, "blennie|gobie"))
+# -- Add Zeros back in  --------------------------------------------------
 
-# --- Station-level summary -----------------------------------------------
+biomass_by_taxa_and_station <- biomass_by_taxa_and_station |> 
+  complete(nesting(ps_station_id, ps_site_id, exp_id, region, subregion, habitat, exposure, divers, depth_strata, depth_m),
+           nesting(accepted_name, accepted_aphia_id, rank, family, trophic_group),
+           fill = list(total_count      = 0,
+                       avg_count        = 0,
+                       avg_length_cm    = NA,
+                       min_length       = NA,
+                       max_length       = NA,
+                       density_m2       = 0,
+                       biomass_gm2      = 0))
 
-region_lookup <- stations |> distinct(ps_site_id, region)
 
-station_summary <- biomass_by_station_and_taxa |> 
-  group_by(ps_site_id, ps_station_id, depth_strata) |> 
-  summarize(n_taxa         = n_distinct(accepted_aphia_id[avg_count > 0]),
-            total_count    = sum(total_count),
-            avg_count      = sum(avg_count),
-            avg_count_m2   = sum(avg_count_m2),
-            avg_biomass_m2 = sum(avg_biomass_m2),
-            .groups = "drop") |> 
-  left_join(stations |> 
-              distinct(ps_site_id, ps_station_id, region, subregion, locality, habitat, exposure, n_transects),
-            by = c("ps_site_id", "ps_station_id")) |> 
-  mutate(across(c(avg_count, avg_count_m2, avg_biomass_m2), 
-                ~round(.x, 4))) |> 
-  select(region, subregion, locality, ps_site_id, ps_station_id, depth_strata, n_transects,
-         n_taxa, total_count, avg_count, avg_count_m2, avg_biomass_m2,  habitat, exposure) 
+# Tmp
+
+stations <- stations |> 
+  mutate(divers = str_replace(divers, "ALG", "Allison Green") |>
+           str_replace("JEC", "Jenn Caselle") |> 
+           str_replace("AMF", "Alan Friedlander") |>
+           str_replace("VAS", "Vyvyan Summers") |>
+           str_replace("AJKM", "Andrew Mcinnis"))
 ```
 
-In total, we conducted surveys at `r n_distinct(stations$ps_site_id)` sites and `r n_distinct(stations$ps_station_id)` stations across `r n_distinct(stations$region)` regions, covering approximately `r sum(stations$area_m2)` m² of reef habitat (@tbl-fish-stations, @fig-map).
+In total, we conducted surveys at `r n_distinct(stations$ps_site_id)` sites and `r n_distinct(stations$ps_station_id)` stations across `r n_distinct(stations$region)` regions, covering approximately `r sum(stations$survey_area_m2)` m² of reef habitat (@tbl-fish-stations, @fig-map).
 
 ```{r}
 #| label: fig-map
 #| fig-cap: "Map of fish survey stations"
 #| 
-# Habitat map
-habitat_pal <- c("fore reef"  = "#C5FFFD",
-                 "back reef"  = "#DF2935",
-                 "channel"    = "#D8CC34",
-                 "patch reef" = "#772D8B")
 
-trophic_palette <- c("Herbivore/Detritivore" = "#5C9E5C",   # Earthy green (natural, calming)
-                     "Planktivore"            = "#4C9CB2",   # Soft teal-blue (planktivores)
-                     "Lower-carnivore"        = "#E1B07E",   # Sandy ochre (mid-level predator)
-                     "Top-predator"           = "#C75D4D",   # Muted brick red (assertive but not harsh)
-                     "Shark"                  = "#7E6FAB",   # Deep slate violet (distinctive, dignified)
-                     "NA"                     = "#D0D0D0")    # Light neutral gray (non-disruptive)
+habitat_pal <- c("fore_reef"  = "#C5FFFD",
+                 "back_reef"  = "#DF2935",
+                 "channel"    = "#D8CC34",
+                 "patch_reef" = "#772D8B")
+
 
 stations_sf <- stations |>
   left_join(uvs_sites |> 
@@ -138,10 +139,10 @@ stations_sf <- stations |>
             by = "ps_site_id") |>
   mutate(habitat = factor(habitat, levels = names(habitat_pal))) |>
   group_by(ps_site_id, region, subregion, locality, habitat, exposure, latitude, longitude) |> 
-  summarize(team = paste(unique(diver), collapse = "/"),
+  summarize(team = paste(unique(divers), collapse = "/"),
             strata = paste(unique(paste(depth_strata, " (",depth_m ,"m)", sep = "")), 
                             collapse = "\n"),
-            surveyed_area = sum(area_m2),
+            survey_area_m2 = sum(survey_area_m2),
             n_stations = n_distinct(ps_station_id),
             .groups = "drop") |>
   sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326) 
@@ -153,7 +154,7 @@ mapview::mapview(stations_sf,
                  map.types = "Esri.WorldImagery",
                  layer.name = "Habitat",
                  popup = leafpop::popupTable(stations_sf, 
-                                             zcol = c("ps_site_id", "strata", "team", "surveyed_area", "habitat", "exposure"))) |> 
+                                             zcol = c("ps_site_id", "strata", "team", "survey_area_m2", "habitat", "exposure"))) |> 
   leafem::addMouseCoordinates() |> 
   addFullscreenControl()
 ```
@@ -171,7 +172,7 @@ stations |>
   tab_header(title = "Summary of sampling effort by region",
              subtitle = "Number of stations surveyed by depth strata and habitat") |>
   tab_spanner(label = "Reef Habitats", 
-              columns = c("fore reef", "back reef", "channel", "patch reef")) |> 
+              columns = c("fore_reef", "back_reef", "channel", "patch_reef")) |> 
   tab_style(style = list(cell_fill(color = "#f0f0f0"),
                          cell_text(weight = "bold")),
             locations = list(cells_column_labels(everything()),
@@ -199,25 +200,27 @@ In the following sections, we explore spatial and ecological patterns in species
 
 ```{r}
 # --- Region-level summary -----------------------------------------------
-region_summary <- station_summary |> 
+region_summary <- stations |> 
   group_by(region) |> 
   summarize(n_stations = n_distinct(ps_station_id),
-            total_count = sum(total_count),
-            avg_taxa = round(mean(n_taxa)),
-            avg_count = round(mean(avg_count)),
-            avg_count_m2 = mean(avg_count_m2),
-            avg_biomass_m2 = mean(avg_biomass_m2),
+            survey_area_m2 = sum(survey_area_m2),
+            avg_taxa = mean(avg_taxa),
+            avg_count  = mean(avg_count),
+            avg_density_m2 = mean(density_m2),
+            avg_biomass_gm2 = mean(biomass_gm2),
+            median_biomass_gm2 = median(biomass_gm2),
+            across(contains("pct") , ~ round(mean(.x, na.rm = TRUE), 2)), 
             .groups = "drop")
 
-n_taxa_by_region <- biomass_by_station_and_taxa |>
-  left_join(region_lookup) |>
+n_taxa_by_region <- biomass_by_taxa_and_station |>
   group_by(region) |> 
   summarise(n_taxa = n_distinct(accepted_aphia_id[avg_count > 0]),
             .groups = "drop") 
 
 region_summary <- region_summary |> 
   left_join(n_taxa_by_region) |> 
-  relocate(n_taxa, .after = n_stations) 
+  relocate(n_taxa, .after = survey_area_m2) |> 
+  mutate(across(where(is.numeric), ~round(.x, 2)))
 ```
 
 ```{r}
@@ -225,18 +228,23 @@ region_summary <- region_summary |>
 #| tbl-cap: "Summary of fish surveys by region"
 
 region_summary |> 
-  mutate(across(where(is.numeric), ~round(.x, 2)),
-         total_count = scales::comma(total_count)) |> 
+  mutate(survey_area_m2 = scales::comma(survey_area_m2)) |> 
   gt(rowname_col = "region") |> 
   tab_header(title = "Summary of Fish Surveys by Region",
-             subtitle = "Average counts and biomass per station") |> 
+             subtitle = "Average counts, biomass, and trophic composition per station") |> 
   cols_label(n_stations = "Stations",
+             survey_area_m2 = "Survey Area (m²)",
              n_taxa = "Taxa Observed",
-             total_count = "Total Individuals",
-             avg_count = "Avg. Count",
-             avg_taxa = "Avg. Nº Taxa",
-             avg_count_m2 = "Avg. Count (per m²)",
-             avg_biomass_m2 = "Avg. Biomass (g/m²)") |> 
+             avg_taxa = "Avg. Nº Taxa (per transect)",
+             avg_count = "Avg. Count (per transect)",
+             avg_density_m2 = "Avg. Density (ind/m²)",
+             avg_biomass_gm2 = "Avg. Biomass (g/m²)",
+             median_biomass_gm2 = "Median Biomass (g/m²)",
+             pct_top_predator = "% Top Predator",
+             pct_shark = "% Shark",
+             pct_lower_carni = "% Lower Carnivore",
+             pct_herbi_detri = "% Herbivore/Detritivore",
+             pct_plankti = "% Planktivore") |> 
   tab_style(style = list(cell_fill(color = "#f0f0f0"),
                          cell_text(weight = "bold")),
             locations = cells_column_labels(everything())) |>
@@ -251,25 +259,27 @@ region_summary |>
 ```{r}
 # --- Subregion-level summary -----------------------------------------------
 
-subregion_summary <- station_summary |> 
+subregion_summary <- stations |> 
   group_by(region, subregion) |> 
   summarize(n_stations = n_distinct(ps_station_id),
-            total_count = sum(total_count),
-            avg_taxa = round(mean(n_taxa)),
-            avg_count = round(mean(avg_count)),
-            avg_count_m2 = mean(avg_count_m2),
-            avg_biomass_m2 = mean(avg_biomass_m2),
+            survey_area_m2 = sum(survey_area_m2),
+            avg_taxa = mean(avg_taxa),
+            avg_count  = mean(avg_count),
+            avg_density_m2 = mean(density_m2),
+            avg_biomass_gm2 = mean(biomass_gm2),
+            median_biomass_gm2 = median(biomass_gm2),
+            across(contains("pct") , ~ round(mean(.x, na.rm = TRUE), 2)), 
             .groups = "drop")
 
-n_taxa_by_subregion <- biomass_by_station_and_taxa |>
-  left_join(stations |> distinct(ps_site_id, region, subregion)) |>
-  group_by(subregion) |> 
+n_taxa_by_subregion <- biomass_by_taxa_and_station |>
+  group_by(region, subregion) |> 
   summarise(n_taxa = n_distinct(accepted_aphia_id[avg_count > 0]),
             .groups = "drop") 
 
 subregion_summary <- subregion_summary |> 
   left_join(n_taxa_by_subregion) |> 
-  relocate(n_taxa, .after = n_stations) 
+  relocate(n_taxa, .after = survey_area_m2) |> 
+  mutate(across(where(is.numeric), ~round(.x, 2)))
 ```
 
 ```{r}
@@ -277,19 +287,24 @@ subregion_summary <- subregion_summary |>
 #| tbl-cap: "Summary of fish surveys by subregion"
 
 subregion_summary |> 
-  mutate(across(where(is.numeric), ~round(.x, 2)),
-         total_count = scales::comma(total_count)) |> 
-  gt(groupname_col = "region",
-     rowname_col = "subregion") |> 
-  tab_header(title = "Summary of Fish Surveys by Island",
+  mutate(survey_area_m2 = scales::comma(survey_area_m2)) |> 
+  gt(rowname_col = "subregion",
+     groupname_col = "region") |> 
+  tab_header(title = "Summary of Fish Surveys by Region",
              subtitle = "Average counts and biomass per station") |> 
-  cols_label(n_stations = "Stations",
+cols_label(n_stations = "Stations",
+             survey_area_m2 = "Survey Area (m²)",
              n_taxa = "Taxa Observed",
-             total_count = "Total Individuals",
-             avg_taxa = "Avg. Nº Taxa",
-             avg_count = "Avg. Count",
-             avg_count_m2 = "Avg. Count (per m²)",
-             avg_biomass_m2 = "Avg. Biomass (g/m²)") |> 
+             avg_taxa = "Avg. Nº Taxa (per transect)",
+             avg_count = "Avg. Count (per transect)",
+             avg_density_m2 = "Avg. Density (ind/m²)",
+             avg_biomass_gm2 = "Avg. Biomass (g/m²)",
+             median_biomass_gm2 = "Median Biomass (g/m²)",
+             pct_top_predator = "% Top Predator",
+             pct_shark = "% Shark",
+             pct_lower_carni = "% Lower Carnivore",
+             pct_herbi_detri = "% Herbivore/Detritivore",
+             pct_plankti = "% Planktivore") |> 
   tab_style(style = list(cell_fill(color = "#f0f0f0"),
                          cell_text(weight = "bold")),
             locations = cells_column_labels(everything())) |>
@@ -306,49 +321,57 @@ subregion_summary |>
 ```{r}
 # --- Taxon-level summary -----------------------------------------------
 
-taxa_summary <- biomass_by_station_and_taxa |> 
-  group_by(trophic_group, order, family, accepted_name) |> 
-  summarise(total_count = sum(total_count),
-            avg_length_wm = round(mean(avg_length_wm, na.rm = T)),
-            avg_count = mean(avg_count),
-            freq_obs = round(100*sum(avg_count_m2 > 0)/n(),2),
-            across(c("avg_biomass_m2","avg_count_m2"), mean, na.rm = T),
-            .groups = "drop") |> 
-  left_join(biomass_per_obs |> 
-              group_by(accepted_name) |> 
-              summarize(min_tl_cm = min(avg_length),
-                        max_tl_cm = max(avg_length),
-                        .groups = "drop")) |> 
-  mutate(across(c(freq_obs, avg_count, avg_biomass_m2, avg_count_m2), ~round(.x, 6))) 
+taxa_summary <- biomass_by_taxa_and_station |> 
+  group_by(trophic_group, family, accepted_name) |> 
+  summarise(freq_obs = round(100*sum(total_count > 0)/n(),2),
+            total_count = sum(total_count),
+            avg_count = round(mean(avg_count, na.rm = T),3),
+            avg_length_cm = round(mean(avg_length_cm, na.rm = T)),
+            min_length_cm = min(min_length_cm, na.rm = T),
+            max_length_cm = max(max_length_cm, na.rm = T),
+            across(c("density_m2","biomass_gm2"),\(x) mean(x, na.rm = TRUE)),
+            .groups = "drop") 
+
+taxa_summary <- taxa_summary |> 
+  left_join(fish_lut |> 
+              distinct(order, family)) |> 
+  select(order, everything())
 
 # --- Family - level summary -------------------------------------
 
-biomass_by_station_and_family <- biomass_by_station_and_taxa |>
-  group_by(ps_station_id, order, family) |>
+biomass_by_station_and_family <- biomass_by_taxa_and_station |>
+  group_by(ps_station_id, family) |>
   summarise(total_count    = sum(total_count), 
             avg_count      = sum(avg_count),
-            avg_count_m2   = sum(avg_count_m2),
-            avg_biomass_m2 = sum(avg_biomass_m2),
+            density_m2     = sum(density_m2),
+            biomass_gm2    = sum(biomass_gm2),
             .groups = "drop")
 
 family_summary <- biomass_by_station_and_family |> 
-  group_by(order, family) |> 
-  summarise(freq_obs       = round(100 * n_distinct(ps_station_id[avg_count_m2 > 0]) / n_distinct(ps_station_id),1),,
+  group_by(family) |> 
+  summarise(freq_obs       = round(100*sum(total_count > 0)/n(),2),
             avg_count      = round(mean(avg_count), 3),
-            avg_count_m2   = mean(avg_count_m2),
-            avg_biomass_m2 = mean(avg_biomass_m2),
-            .groups = "drop") |>
-  left_join(biomass_by_station_and_taxa |>
-              group_by(order, family) |>
+            avg_density_m2   = mean(density_m2),
+            avg_biomass_gm2 = mean(biomass_gm2),
+            .groups = "drop") 
+
+family_summary <- family_summary |> 
+  left_join(biomass_by_taxa_and_station |>
+              group_by(family) |>
               summarise(total_count = round(sum(total_count)),
-                        n_taxa     = n_distinct(accepted_name[avg_count_m2 > 0]),
+                        n_taxa      = n_distinct(accepted_name[total_count > 0]),
                         .groups = "drop"),
-            by = c("order", "family")) |>
-  mutate(across(c(avg_count, avg_count_m2, avg_biomass_m2), round, 6)) |> 
-  select(order, family, n_taxa, total_count, everything())
+             by = "family") |> 
+  mutate(across(c(avg_density_m2, avg_biomass_gm2), round, 6)) |> 
+  select(family, n_taxa, total_count, everything())
+
+family_summary <- family_summary |> 
+  left_join(fish_lut |> 
+              distinct(order, family)) |> 
+  select(order, everything())
 ```
 
-During the expedition, we recorded a total of `r sum(biomass_per_obs$count)` individual fish across **`r n_distinct(biomass_per_obs$accepted_aphia_id)`** distinct taxa during standardized transect surveys. Species richness varied across regions with Lovongai exhibiting the highest number of taxa  (`r region_summary$n_taxa[region_summary$region == "Lovongai"]` species), followed by the Western Islands and Manus. Murat showed the lowest regional richness, with only `r region_summary$n_taxa[region_summary$region == "Murat"]` species observed.
+During the expedition, we recorded a total of `r sum(observations$count)` individual fish across **`r n_distinct(observations$accepted_aphia_id)`** distinct taxa during standardized transect surveys. Species richness varied across regions with Lovongai exhibiting the highest number of taxa  (`r region_summary$n_taxa[region_summary$region == "Lovongai"]` species), followed by the Western Islands and Manus. Murat showed the lowest regional richness, with only `r region_summary$n_taxa[region_summary$region == "Murat"]` species observed.
 
 ```{r treemap, include = T, eval = T}
 #| label: fig-richness-treemap
@@ -420,10 +443,10 @@ family_summary_tbl <- family_summary |>
          `Total Count`    = total_count,
          `Avg. Count`           = round(avg_count, 2),
          `Freq. Occurrence (%)` = round(freq_obs, 1),
-         `Avg. Abundance (ind/m²)`      = round(avg_count_m2, 4),
-         `Avg. Biomass (g/m²)`  = round(avg_biomass_m2, 4)) |>
+         `Avg. Density (ind/m²)`      = round(avg_density_m2, 4),
+         `Avg. Biomass (g/m²)`  = round(avg_biomass_gm2, 4)) |>
   select(order, family, `Taxa Observed`, `Total Count`, `Avg. Count`, 
-         `Freq. Occurrence (%)`, `Avg. Abundance (ind/m²)`, `Avg. Biomass (g/m²)`)
+         `Freq. Occurrence (%)`, `Avg. Density (ind/m²)`, `Avg. Biomass (g/m²)`)
 
 # Build table
 reactable(family_summary_tbl,
@@ -438,7 +461,7 @@ reactable(family_summary_tbl,
                                  family                 = colDef(name = "Family", minWidth = 150),
                                  `Freq. Occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
                                  `Avg. Biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
-                                 `Avg. Abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |> 
+                                 `Avg. Density (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |> 
   add_title("Fish Families") |> 
   add_subtitle("Summary of fish families observed during the expedition",
                font_size = 20,
@@ -460,18 +483,18 @@ We explore differences in community composition across regions in the next secti
 #| 
 # Prepare data
 taxa_summary_tbl <- taxa_summary |> 
-  rename(`Avg. length (cm)`        = avg_length_wm,
+  rename(`Avg. length (cm)`        = avg_length_cm,
          `Total count`             = total_count,
          `Accepted name`           = accepted_name,
          `Trophic group`           = trophic_group) |> 
-  mutate(`Length range (cm)`       = paste0(min_tl_cm, "–", max_tl_cm),
+  mutate(`Length range (cm)`       = paste0(min_length_cm, "–", max_length_cm),
          `Avg. count`              = round(avg_count, 2),
          `Freq. occurrence (%)`    = round(freq_obs, 1),
-         `Avg. abundance (ind/m²)` = round(avg_count_m2, 4),
-         `Avg. biomass (g/m²)`     = round(avg_biomass_m2, 4)) |>
+         `Avg. Density (ind/m²)` = round(density_m2, 4),
+         `Avg. Biomass (g/m²)`     = round(biomass_gm2, 4)) |>
   select(family, `Accepted name`, `Trophic group`, `Length range (cm)`, `Avg. length (cm)`,
          `Total count`, `Avg. count`, `Freq. occurrence (%)`,
-         `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`)
+         `Avg. Density (ind/m²)`, `Avg. Biomass (g/m²)`)
 
 # Build interactive table
 reactable(taxa_summary_tbl,
@@ -487,8 +510,8 @@ reactable(taxa_summary_tbl,
                                                              cell = function(value) htmltools::tags$i(value),
                                                              minWidth = 180),
                          `Freq. occurrence (%)`     = colDef(cell = function(value) paste0(value, "%"), align = "center"),
-                         `Avg. biomass (g/m²)`      = colDef(cell = function(value) comma(value, accuracy = 0.001)),
-                         `Avg. abundance (ind/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
+                         `Avg. Biomass (g/m²)`      = colDef(cell = function(value) comma(value, accuracy = 0.001)),
+                         `Avg. Density (ind/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
   add_title("Fish species") |>
   add_subtitle("Summary of fish species observed during the expedition",
                font_size  = 20,
@@ -497,17 +520,6 @@ reactable(taxa_summary_tbl,
 ```
 
 # Species Richness
-
-```{r}
-# To ensure consistent sampling effort and clean estimation of observer effects, we excluded four stations surveyed by dual diver teams. These represented <3% of stations and were not systematically distributed across sites or regions.”
-
-richness_by_station <- biomass_by_station_and_taxa |>
-  filter(!str_detect(common_family, "blennie|gobie")) |> 
-  left_join(stations) |> 
-  group_by(ps_site_id, ps_station_id, diver, region, subregion, n_transects,  depth_strata) |>
-  summarise(richness = n_distinct(accepted_aphia_id[avg_count > 0]), .groups = "drop") |> 
-  filter(!str_detect(diver, "/")) 
-```
 
 #### Did we sample enough?
 
@@ -520,37 +532,49 @@ To assess the completeness of our species inventories across regions, we generat
 
 library(vegan)
 
-# Species matrix with one row per station × region
+# Species matrix with one row per transect
 
-spp_matrix <- biomass_by_station_and_taxa |> 
-  left_join(stations |> select(ps_station_id, region), by = "ps_station_id") |> 
-  filter(avg_count > 0) |> 
-  select(region, ps_station_id, accepted_name, avg_count) |> 
-  pivot_wider(names_from = accepted_name, values_from = avg_count, values_fill = 0) |> 
-  distinct(ps_station_id, .keep_all = TRUE) |>  # Keep one row per station
+biomass_by_transect_and_taxa <- observations |> 
+  mutate(ps_transect_id = paste(ps_station_id, diver, station_label, transect, sep = "_")) |> 
+  group_by(ps_station_id, diver, station_label, transect, ps_transect_id,
+           accepted_name, accepted_aphia_id, rank, family, trophic_group) |> 
+  summarize(sum_length_count = sum(length_cm * count, na.rm = TRUE),
+            min_length = min(length_cm, na.rm = TRUE),
+            max_length = max(length_cm, na.rm = TRUE),
+            across(c(count, biomass_g, biomass_gm2, density_m2), 
+                   \(x) sum(x, na.rm = TRUE)),
+            .groups = "drop") |> 
+  left_join(stations |> 
+              distinct(ps_station_id, region),
+            by = "ps_station_id")
+
+spp_matrix <- biomass_by_transect_and_taxa |> 
+  select(region, ps_transect_id, accepted_name, count) |> 
+  pivot_wider(names_from = accepted_name, values_from = count, values_fill = 0) |> 
+  distinct(ps_transect_id, .keep_all = TRUE) |>  # Keep one row per station
   nest(data = -region)
 
 # 2. Species accumulation per region
 accum_curves <- spp_matrix |> 
   mutate(acc = map(data, ~ specaccum(select(.x, where(is.numeric)), method = "random")),
-         curve = map(acc, ~ tibble(station_number = .x$sites,
+         curve = map(acc, ~ tibble(transect = .x$sites,
                                    richness = .x$richness,
                                    sd = .x$sd))) |> 
   select(region, curve) |> 
   unnest(curve)
 
 # 3. Plot
-ggplot(accum_curves, aes(x = station_number, y = richness, color = region, fill = region)) +
+ggplot(accum_curves, aes(x = transect, y = richness, color = region, fill = region)) +
   geom_line(linewidth = 1) +
   geom_ribbon(aes(ymin = richness - sd, ymax = richness + sd), alpha = 0.2, color = NA) +
   labs(title = "Species Accumulation Curves by Region",
-       x = "Number of Stations",
+       x = "Number of Transects",
        y = "Accumulated Species Richness") +
   theme(legend.position = "bottom")+
   labs(fill = "", col = "")
 ```
 
-The species accumulation curves for all four regions display a steady increase in observed richness with additional sampling effort, with none reaching a clear asymptote. This suggests that the species inventories from these surveys remain incomplete. Lovongai and Manus exhibit the steepest accumulation trajectories, indicating both higher species richness and potentially greater under-sampling relative to their true diversity. In contrast, the slower but still-rising curves for Murat and the Western Islands imply lower overall richness but similarly incomplete sampling coverage.
+Lovongai reaches the highest species richness, exceeding 320 species, followed by Manus and Western Islands at around 300 species, while Murat consistently shows the lowest richness at about 270 species. The narrowing confidence intervals with increased sampling suggest stable and reliable richness estimates at higher transect numbers, revealing clear regional differences in biodiversity.
 
 #### Differences across depth strata, divers, and regions?
 
@@ -564,15 +588,15 @@ Let look at some initial exploratory plots of species richness by depth strata, 
 #| label: fig-diversity-region
 #| fig-cap: "Species richnnes by region"
 #| fig-width: 9
-ggstatsplot::ggbetweenstats(data = richness_by_station, 
+ggstatsplot::ggbetweenstats(data = stations, 
                             x = region, 
-                            y = richness, 
+                            y = avg_taxa, 
                             mean.ci = TRUE,
                             pairwise.comparisons = TRUE,
                             p.adjust.method = "holm",
                             type = "nonparametric",
                             title = "Species richness by region", 
-                            xlab = "", ylab = "Number of species per station")
+                            xlab = "", ylab = "Number of species per transect")
 ```
 
 ###### Depth strata
@@ -582,9 +606,9 @@ ggstatsplot::ggbetweenstats(data = richness_by_station,
 #| fig-cap: "Species richnnes by depth strata"
 #| fig-width: 9
 
-ggstatsplot::ggbetweenstats(data = richness_by_station, 
+ggstatsplot::ggbetweenstats(data = stations, 
                             x = depth_strata, 
-                            y = richness, 
+                            y = avg_taxa, 
                             mean.ci = TRUE,
                             pairwise.comparisons = TRUE,
                             p.adjust.method = "holm",
@@ -599,18 +623,64 @@ ggstatsplot::ggbetweenstats(data = richness_by_station,
 #| label: fig-diversity-diver
 #| fig-cap: "Species richnnes by diver"
 #| fig-width: 9
-ggstatsplot::ggbetweenstats(data = richness_by_station, 
-                            x = diver, 
-                            y = richness, 
-                            mean.ci = TRUE,
-                            pairwise.comparisons = TRUE,
-                            p.adjust.method = "holm",
-                            type = "nonparametric",
-                            title = "Species richness by diver", 
-                            xlab = "", ylab = "Number of species per station")
+
+stations |> 
+  filter(!str_detect(divers, "\\|")) |> 
+  ggstatsplot::ggbetweenstats(x = divers, 
+                              y = avg_taxa, 
+                              mean.ci = TRUE,
+                              pairwise.comparisons = TRUE,
+                              p.adjust.method = "holm",
+                              type = "nonparametric",
+                              title = "Species richness by diver", 
+                              xlab = "", ylab = "Number of species per transect")
 ```
 
 :::
+
+```{r}
+p <- ggplot(stations, 
+       aes(x = factor(region), y = avg_taxa, fill = factor(region))) +
+  stat_halfeye(adjust = 0.3,
+               justification = -0.12,
+               .width = 0,
+               point_colour = NA,
+               show.legend = FALSE,
+               alpha = 0.3,
+               slab_color = NA) +
+  geom_boxplot(width = 0.12,
+               outlier.shape = NA,
+               alpha = 0.5,
+               show.legend = FALSE,
+               color = "black") +
+  stat_dots(side = "left",
+            justification = 1.1,
+            binwidth = 0.4,
+            dotsize = 0.7,
+            alpha = 0.6,
+            show.legend = FALSE) +
+  stat_summary(fun = median,
+               geom = "text",
+               aes(label = number(..y.., accuracy = 0.1)),
+               hjust = -0.2,
+               size = 3,
+               color = "black") +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "# taxa per transect",
+       title = paste("Species richness by region"),
+       subtitle = "Average number of species recorded per transect",
+       x = "", fill = "", color = "") +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.major.y = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(face = "bold", size = 14),
+        plot.title.position = "plot",
+        axis.text.y = element_text(size = 12),
+        axis.text.x = element_text(size = 11))
+
+ggsave(plot = p, file.path(exp_path, "figures/uvs_fish_richness_by_region.pdf"), width = 10, height = 8)
+```
 
 To investigate the drivers of species richness across stations, we fit a linear mixed-effects model with region, depth, diver, and sampling effort as predictors, accounting for repeated observations within sites (@tbl-richness-params).
 
@@ -618,13 +688,14 @@ To investigate the drivers of species richness across stations, we fit a linear 
 #| label: tbl-richness-params
 #| tbl-cap: "Model estimates for species richness"
 
-spp_model <- lmer(richness ~ n_transects + depth_strata + diver +  region  + (1 | ps_site_id),
-                  data = richness_by_station)
+spp_model <- lmer(total_taxa ~ n_transects + depth_strata + divers +  region + exposure + habitat  + (1 | ps_site_id),
+                  data = stations |> 
+                    filter(!str_detect(divers, "\\|")))
 
 # Extract results
 spp_model_anova <- anova(spp_model)
 spp_model_summary <- summary(spp_model)
-spp_model_emm_diver <- emmeans(spp_model, pairwise ~ diver, adjust = "tukey")
+spp_model_emm_diver <- emmeans(spp_model, pairwise ~ divers, adjust = "tukey")
 spp_model_emm_region <- emmeans(spp_model, pairwise ~ region, adjust = "tukey")
 
 model_parameters(spp_model, effects = "fixed") |> 
@@ -644,7 +715,7 @@ model_parameters(spp_model, effects = "fixed") |>
 
 #### Key findings
 
-The species richness model revealed strong observer effects (χ² = 8.8, p < 0.001) and modest but statistically significant differences across regions (χ² = 3.3, p = 0.024). Sampling effort (χ² = 42.9, p < 0.001) was, as expected, a major predictor of richness—indicating that increasing the number of transects substantially boosts the number of species detected. In contrast, depth strata had no discernible effect on richness (χ² = 0.08, p = 0.92), suggesting that species richness remained consistent across depth zones.
+The species richness model revealed strong observer effects (χ² = 8.8, p < 0.001) and modest but statistically significant differences across regions (χ² = 3.3, p = 0.024). Sampling effort (χ² = 42.9, p < 0.001) was, as expected, a major predictor of richness—indicating that increasing the number of transects substantially boosts the number of species detected. In contrast, depth strata had no discernible effect on richness (χ² = 0.08, p = 0.92).
 
 Key findings:
 
@@ -662,7 +733,7 @@ Key findings:
 
 - **Regional differences**: Species richness was modestly influenced by region (χ² = 3.3, p = 0.024).   
 
-  - Estimated marginal means indicate slightly lower richness in Murat (41.8 spp) compared to Lovongai (48.7), Manus (48.6), and the Western Islands (51.6).
+  - Estimated marginal means indicate lower richness in Murat (41.4 spp) compared to Lovongai (48.3), Manus (48.3), and the Western Islands (48.4).
   - The pairwise difference between Murat and Western Islands approached significance (p = 0.055), suggesting a possible regional signal.
 
 ::: {.panel-tabset}
@@ -697,7 +768,7 @@ spp_model_emm_region |>
 
 spp_model_emm_diver |> 
   cld(adjust = "tukey", Letters = letters, alpha = 0.05) |> 
-  ggplot(aes(x = reorder(diver, emmean), y = emmean))+
+  ggplot(aes(x = reorder(divers, emmean), y = emmean))+
   geom_point()+
   geom_errorbar(aes(ymin = lower.CL, ymax = upper.CL), width = 0.2, color = "#F08A4B")+
   geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
@@ -711,22 +782,136 @@ spp_model_emm_diver |>
 
 :::
 
-
 ## Biodiversity surveys
 
-For a subset of station in Manus and the Western Islands provinces, we also conducted biodiversity surveys to assess the diversity of reef fish communities. These surveys were designed to complement the standardized transect surveys and provide a more comprehensive understanding of the fish assemblages in these regions.
+```{r}
+bio_obs <- read_xlsx(file.path(exp_path, "data", "primary", "raw", "fish", "PNG_2024_fish_fieldbook_ALG_FINAL.xlsx"),
+          sheet = "biodiversity observations") |> 
+  select(ps_site_id = ps_station_id, taxon_valid_name, rel_abundance_code)
 
+name_to_accepted_AphiaID <- fish_lut |>
+    pivot_longer(cols = c("taxon_name", "accepted_name"), names_to = "orig_col", values_to = "lookup_name") |>
+    filter(!is.na(lookup_name)) |>
+    distinct(accepted_aphia_id, lookup_name)
 
-# Abundance
+bio_obs <- bio_obs |> 
+  left_join(name_to_accepted_AphiaID, by = c("taxon_valid_name" = "lookup_name")) |> 
+  filter(!is.na(accepted_aphia_id)) |> 
+  mutate(ps_site_id = str_replace(ps_site_id, "(\\d+)$", ~ str_pad(.x, width = 3, pad = "0"))) |> 
+  left_join(stations |> 
+              distinct(ps_site_id, region)) |> 
+  select(region, ps_site_id, taxon_valid_name, accepted_aphia_id, everything())
+
+bio_aphiaIDs_per_region <- bio_obs |> 
+  group_by(region, taxon_valid_name, accepted_aphia_id) |> 
+  summarize(n_sites = n_distinct(ps_site_id),
+            # most common rel abundance code
+            rel_abundance_code = names(which.max(table(rel_abundance_code))),
+            .groups = "drop") 
+
+blt_aphiaIDs_per_region <- biomass_by_taxa_and_station |> 
+  filter(total_count > 0) |> 
+  left_join(stations |> 
+              distinct(ps_station_id, region)) |>
+  distinct(region, accepted_aphia_id, accepted_name)
+
+new_bio_obs <- bio_aphiaIDs_per_region |> 
+  anti_join(blt_aphiaIDs_per_region) 
+
+new_bio_obs <- new_bio_obs |> 
+  left_join(fish_lut |> distinct(accepted_aphia_id, family, rank)) |> 
+  filter(rank == "species")
+  
+new_taxa_summary <- bio_obs |> 
+  group_by(region) |> 
+  summarize(n_sites = n_distinct(ps_site_id),
+            n_taxa = n_distinct(accepted_aphia_id),
+              .groups = "drop") |> 
+  left_join(new_bio_obs |> 
+              group_by(region) |> 
+              summarize(new_taxa = n_distinct(accepted_aphia_id)))
+
+region_summary |> 
+  select(region, n_taxa) |> 
+  left_join(new_taxa_summary |> 
+              select(region, new_taxa)) |> 
+  mutate(total = rowSums(cbind(n_taxa, new_taxa), na.rm = T)) 
+```
+
+For three sites in Manus and 27 sites in the Western Islands, Allison Green conducted 90-minute free-swim surveys between 0 and 30 meters depth, following Gerry Allen’s method, to complement the standard belt transects and enhance the assessment of reef fish diversity. 
+
+These surveys added a total of `r new_taxa_summary$new_taxa[new_taxa_summary$region == "Manus"]` species to Manus and 
+`r new_taxa_summary$new_taxa[new_taxa_summary$region == "Western Islands"]` species to the Western Islands. As a result, the Western Islands recorded the highest total richness (biodiverisy + BLT surveys) with 464 reef fish species, followed by Manus (355 species), Lovongai (326 species), and Murat (275 species). The families contributing the most additional records were Pomacentridae (22 species), Labridae (17 species), and Apogonidae (13 species).
+
+::: {.panel-tabset}
+
+### Manus
 
 ```{r}
-abundance_by_station <- biomass_by_station_and_taxa |>
-  filter(!str_detect(common_family, "blennie|gobie")) |> 
-  left_join(stations) |> 
-  group_by(ps_site_id, ps_station_id, diver, region, subregion, n_transects, depth_strata) |>
-  summarise(avg_count_m2 = sum(avg_count_m2), .groups = "drop") |> 
-  filter(!str_detect(diver, "/")) 
+library(dplyr)
+library(reactable)
+library(reactablefmtr)
+
+new_bio_obs |>
+  filter(region == "Manus") |>
+  select(family, taxon_valid_name, n_sites, rel_abundance_code) |>
+  reactable(groupBy = "family",
+            searchable = TRUE,
+            pagination = TRUE,
+            defaultPageSize = 10,
+            striped = TRUE,
+            highlight = TRUE,
+            outlined = TRUE,
+            bordered = TRUE,
+            showPageSizeOptions = TRUE,
+            defaultSorted = list(n_sites = "desc"),
+            theme = custom_tbl_theme,
+            columns = list(taxon_valid_name   = colDef(name = "Taxon Name",
+                                                       align = "left",
+                                                       html = TRUE,
+                                                       cell = function(value) {paste0("<i>", value, "</i>")}),
+                           n_sites            = colDef(name = "Number of Sites", align = "center"),
+                           rel_abundance_code = colDef(name = "Relative Abundance", align = "center"))) |> 
+  add_title("Additional fish species observed") |> 
+  add_subtitle("Manus",
+               font_size = 20,
+               font_color = '#666666',
+               margin = reactablefmtr::margin(t=10,r=0,b=15,l=0))
 ```
+
+### Western Islands
+
+```{r}
+new_bio_obs |>
+  filter(region == "Western Islands") |>
+  select(family, taxon_valid_name, n_sites, rel_abundance_code) |>
+  reactable(groupBy = "family",
+            searchable = TRUE,
+            pagination = TRUE,
+            defaultPageSize = 10,
+            striped = TRUE,
+            highlight = TRUE,
+            outlined = TRUE,
+            bordered = TRUE,
+            showPageSizeOptions = TRUE,
+            defaultSorted = list(n_sites = "desc"),
+            theme = custom_tbl_theme,
+            columns = list(taxon_valid_name   = colDef(name = "Taxon Name",
+                                                       align = "left",
+                                                       html = TRUE,
+                                                       cell = function(value) {paste0("<i>", value, "</i>")}),
+                           n_sites            = colDef(name = "Number of Sites", align = "center"),
+                           rel_abundance_code = colDef(name = "Relative Abundance", align = "center"))) |> 
+  add_title("Additional fish species observed") |> 
+  add_subtitle("Western Islands",
+               font_size = 20,
+               font_color = '#666666',
+               margin = reactablefmtr::margin(t=10,r=0,b=15,l=0))
+```
+
+:::
+
+# Abundance
 
 #### Differences across depth strata, divers, and regions?
 
@@ -741,9 +926,9 @@ Let's begin by looking at some initial exploratory plots of numerical abundance 
 #| fig-cap: "Numerical abundance by depth strata"
 #| fig-width: 9
 
-ggstatsplot::ggbetweenstats(data = abundance_by_station, 
+ggstatsplot::ggbetweenstats(data = stations, 
                             x = depth_strata, 
-                            y = avg_count_m2, 
+                            y = density_m2, 
                             mean.ci = TRUE,
                             pairwise.comparisons = TRUE,
                             p.adjust.method = "holm",
@@ -759,9 +944,10 @@ ggstatsplot::ggbetweenstats(data = abundance_by_station,
 #| fig-cap: "Numerical abundance by diver"
 #| fig-width: 9
 #| 
-ggstatsplot::ggbetweenstats(data = abundance_by_station, 
-                            x = diver, 
-                            y = avg_count_m2, 
+ggstatsplot::ggbetweenstats(data = stations|> 
+                              filter(!str_detect(divers, "\\|")), 
+                            x = divers , 
+                            y = density_m2, 
                             mean.ci = TRUE,
                             pairwise.comparisons = TRUE,
                             p.adjust.method = "holm",
@@ -777,9 +963,9 @@ ggstatsplot::ggbetweenstats(data = abundance_by_station,
 #| fig-cap: "Numerical abundance by region"
 #| fig-width: 9
 #| 
-ggstatsplot::ggbetweenstats(data = abundance_by_station, 
+ggstatsplot::ggbetweenstats(data = stations, 
                             x = region, 
-                            y = avg_count_m2, 
+                            y = density_m2, 
                             mean.ci = TRUE,
                             pairwise.comparisons = TRUE,
                             p.adjust.method = "holm",
@@ -797,14 +983,15 @@ We modeled average fish abundance (individuals per m²) at the station level usi
 #| 
 library(glmmTMB)
 
-abund_model <- glmmTMB(avg_count_m2 ~ n_transects + depth_strata + diver + region + (1 | ps_site_id),
+abund_model <- glmmTMB(density_m2 ~ n_transects + depth_strata + divers + region + habitat + exposure + (1 | ps_site_id),
                        family = Gamma(link = "log"),
-                       data = abundance_by_station)
+                       data = stations |> 
+                    filter(!str_detect(divers, "\\|")))
 
 # Extract results
 abund_model_anova <- car::Anova(abund_model)
 abund_model_summary <- summary(abund_model)
-abund_model_emm_diver <- emmeans(abund_model, pairwise ~ diver, adjust = "tukey")
+abund_model_emm_diver <- emmeans(abund_model, pairwise ~ divers, adjust = "tukey")
 abund_model_emm_region <- emmeans(abund_model, pairwise ~ region, adjust = "tukey")
 
 # Parameter estimates
@@ -837,7 +1024,7 @@ Key findings:
     - Estimated marginal means show abundance values of 5.3 ind/m² (Friedlander), 4.3 (Caselle), 3.1 (Green). 
        - Significant pairwise differences were detected between Friedlander and Green (p < 0.001), Summers (p = 0.005), and McKinnis (p = 0.0003).
   - **Regional differences**: Manus exhibited significantly lower abundance than the Western Islands (p = 0.013), while other pairwise contrasts were not statistically significant.
-    - Estimated marginal means indicate the highest abundance in the Western Islands (2.89 ind/m²), followed by Lovongai (2.50), Murat (2.31), and Manus (1.53).Although Lovongai and Murat had moderately higher abundance than Manus (1.6× and 1.5×, respectively), these differences were not significant after adjustment for multiple comparisons (@fig-emmeans-abundance-region).
+    - Estimated marginal means indicate the highest abundance in the Western Islands (2.64 ind/m²), followed by Lovongai (2.03), Murat (1.67), and Manus (1.23).Although Lovongai and Murat had moderately higher abundance than Manus (1.6× and 1.5×, respectively), these differences were not significant after adjustment for multiple comparisons (@fig-emmeans-abundance-region).
 
 ::: {.panel-tabset}
 
@@ -872,11 +1059,11 @@ abun_model_emmeans$emmeans |>
 #| fig-width: 9
 #| 
 
-abun_model_emmeans <- emmeans(abund_model, pairwise ~ diver, type = "response")
+abun_model_emmeans <- emmeans(abund_model, pairwise ~ divers, type = "response")
 
 abun_model_emmeans$emmeans |>
   cld(adjust = "tukey", Letters = letters, alpha = 0.05, type = "response") |> 
-  ggplot(aes(x = reorder(diver, response), y = response))+
+  ggplot(aes(x = reorder(divers, response), y = response))+
   geom_point()+
   geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, color = "#F08A4B")+
   geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
@@ -890,16 +1077,8 @@ abun_model_emmeans$emmeans |>
 
 :::
 
-# Biomass
 
-```{r}
-biomass_by_station <- biomass_by_station_and_taxa |>
-  filter(!str_detect(common_family, "blennie|gobie")) |> 
-  left_join(stations) |> 
-  group_by(ps_site_id, ps_station_id, diver, region, subregion, n_transects, depth_strata, habitat) |>
-  summarise(avg_biomass_m2 = sum(avg_biomass_m2), .groups = "drop") |> 
-  filter(!str_detect(diver, "/")) 
-```
+# Biomass
 
 #### Differences across depth strata, divers, and regions?
 
@@ -914,9 +1093,9 @@ Let's begin by looking at some initial exploratory plots of fish biomass by dept
 #| fig-cap: "Fish biomass by depth strata"
 #| fig-width: 9
 
-ggstatsplot::ggbetweenstats(data = biomass_by_station, 
+ggstatsplot::ggbetweenstats(data = stations, 
                             x = depth_strata, 
-                            y = avg_biomass_m2, 
+                            y = biomass_gm2, 
                             mean.ci = TRUE,
                             pairwise.comparisons = TRUE,
                             p.adjust.method = "holm",
@@ -934,9 +1113,10 @@ ggstatsplot::ggbetweenstats(data = biomass_by_station,
 #| fig-cap: "Fish biomass by diver"
 #| fig-width: 9
 #| 
-ggstatsplot::ggbetweenstats(data = biomass_by_station, 
-                            x = diver, 
-                            y = avg_biomass_m2, 
+ggstatsplot::ggbetweenstats(data = stations|> 
+                              filter(!str_detect(divers, "\\|")), 
+                            x = divers, 
+                            y = biomass_gm2, 
                             mean.ci = TRUE,
                             pairwise.comparisons = TRUE,
                             p.adjust.method = "holm",
@@ -954,9 +1134,9 @@ ggstatsplot::ggbetweenstats(data = biomass_by_station,
 #| fig-cap: "Fish biomass by region"
 #| fig-width: 9
 #| 
-ggstatsplot::ggbetweenstats(data = biomass_by_station, 
+ggstatsplot::ggbetweenstats(data = stations, 
                             x = region, 
-                            y = avg_biomass_m2, 
+                            y = biomass_gm2, 
                             mean.ci = TRUE,
                             pairwise.comparisons = TRUE,
                             p.adjust.method = "holm",
@@ -969,6 +1149,53 @@ ggstatsplot::ggbetweenstats(data = biomass_by_station,
 
 :::
 
+```{r}
+library(ggdist)
+
+p <- stations |> 
+  filter(biomass_gm2 < 1000) |>
+  ggplot( aes(x = factor(region), y = biomass_gm2, fill = factor(region))) +
+  stat_halfeye(adjust = 0.5,
+               justification = -0.12,
+               .width = 0,
+               point_colour = NA,
+               show.legend = FALSE,
+               alpha = 0.3,
+               slab_color = NA) +
+  geom_boxplot(width = 0.12,
+               outlier.shape = NA,
+               alpha = 0.5,
+               show.legend = FALSE,
+               color = "black") +
+  stat_dots(side = "left",
+            justification = 1.1,
+            binwidth = 1,
+            dotsize = 5,
+            alpha = 0.6,
+            show.legend = FALSE) +
+  stat_summary(fun = median,
+               geom = "text",
+               aes(label = number(..y.., accuracy = 0.1)),
+               hjust = -0.2,
+               size = 3,
+               color = "black") +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set2") +
+  labs(y = "fish biomass (g/m2)",
+       title = paste("Fish biomass by region"),
+       subtitle = "Average fish biomass (g/m2) per station",
+       x = "", fill = "", color = "") +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.major.y = element_blank(),
+        legend.position = "none",
+        plot.title = element_text(face = "bold", size = 14),
+        plot.title.position = "plot",
+        axis.text.y = element_text(size = 12),
+        axis.text.x = element_text(size = 11))
+
+ggsave(plot = p, file.path(exp_path, "figures/uvs_fish_biomass_by_region.pdf"), width = 10, height = 8)
+```
+
 We modeled fish biomass (g/m²) at the station level using a generalized linear mixed-effects model (GLMM) with a Gamma distribution and log link. The model included fixed effects for depth strata, diver, region, and sampling effort (number of transects), and a random intercept for site ID (@tbl-biomass-params).
 
 ```{r}
@@ -976,15 +1203,16 @@ We modeled fish biomass (g/m²) at the station level using a generalized linear 
 #| tbl-cap: "Model estimates for fish biomass"
 #| 
 
-biomass_model <- glmmTMB(avg_biomass_m2 ~ n_transects + depth_strata + diver + habitat+ region + (1 | ps_site_id),
+biomass_model <- glmmTMB(biomass_gm2 ~ n_transects + depth_strata + divers + habitat+ region + (1 | ps_site_id),
                          family = Gamma(link = "log"),
-                         data = biomass_by_station)
+                         data = stations |>
+                           filter(!str_detect(divers, "\\|")))
 
 # Extract results
 
 biomass_model_anova <- car::Anova(biomass_model)
 biomass_model_summary <- summary(biomass_model)
-biomass_model_emm_diver <- emmeans(biomass_model, pairwise ~ diver, adjust = "tukey")
+biomass_model_emm_diver <- emmeans(biomass_model, pairwise ~ divers, adjust = "tukey")
 biomass_model_emm_region <- emmeans(biomass_model, pairwise ~ region, adjust = "tukey")
 
 # Parameter estimates
@@ -1010,10 +1238,10 @@ The biomass model revealed strong observer effects (χ² = 25.5, p < 0.001), a s
 
 Key findings:
 
-  - **Depth effect**: Shallow sites had ~21% lower fish biomass than deep sites (β = –0.24, p = 0.007), contrasting with patterns observed in numerical abundance
+  - **Depth effect**: Shallow sites had ~21% lower fish biomass than deep sites (β = –0.25, p = 0.007), contrasting with patterns observed in numerical abundance
   - **Observer effect**: Diver identity had a strong influence on biomass estimates. Compared to Alan Friedlander (reference):
-    - Allison Green recorded ~35% lower biomass (β = –0.44, p = 0.003),
-    - Jenn Caselle recorded ~57% lower biomass (β = –0.84, p < 0.001).
+    - Allison Green recorded ~35% lower biomass (β = –0.43, p = 0.003),
+    - Jenn Caselle recorded ~57% lower biomass (β = –0.83, p < 0.001).
     - Estimated marginal means show biomass values of 357 g/m² (Friedlander), 231 g/m² (Green), and 155 g/m² (Caselle), with differences between Friedlander and both Green (p = 0.029) and Caselle (p = 0.007) statistically significant.
   - **Regional differences**: Biomass in Murat was significantly lower than in Lovongai (β = –0.72, p = 0.009). Manus showed a non-significant negative trend, and the Western Islands did not differ from Lovongai.
     - Estimated marginal means indicate highest biomass in Lovongai (178 g/m²), followed by the Western Islands (152 g/m²), Manus (129 g/m²), and Murat (87 g/m²). Only Murat was significantly different from Lovongai (@fig-emmeans-biomass-region) 
@@ -1050,11 +1278,11 @@ biomass_model_emmeans$emmeans |>
 #| fig-cap: "Estimated marginal means of average biomass by diver, adjusted for differences in sampling effort, depth strata, and region (± 95% CI). Letters indicate statistically distinct groups based on Tukey-adjusted pairwise comparisons"
 #| fig-width: 9
 
-biomass_model_emmeans_diver <- emmeans(biomass_model, pairwise ~ diver, type = "response")
+biomass_model_emmeans_diver <- emmeans(biomass_model, pairwise ~ divers, type = "response")
 
 biomass_model_emmeans_diver$emmeans |>
   cld(adjust = "tukey", Letters = letters, alpha = 0.05, type = "response") |> 
-  ggplot(aes(x = reorder(diver, response), y = response))+
+  ggplot(aes(x = reorder(divers, response), y = response))+
   geom_point()+
   geom_errorbar(aes(ymin = asymp.LCL, ymax = asymp.UCL), width = 0.2, color = "#F08A4B")+
   geom_text(aes(label = .group), vjust = -1, size = 5, fontface = "bold")+
@@ -1086,12 +1314,12 @@ create_family_pal <- function(col, n){
 }
 
 taxa_colors <- taxa_summary |> 
-  distinct(family, accepted_name, avg_biomass_m2) |> 
+  distinct(family, accepted_name, biomass_gm2) |> 
   mutate(color_fam = highcharter::colorize(family, 
                               paletteer_d("ggsci::default_igv", direction = -1, n = 43))) |> 
   arrange(desc(family)) |> 
   group_by(family) |> 
-  arrange(desc(avg_biomass_m2)) |> 
+  arrange(desc(biomass_gm2)) |> 
   mutate(n_taxa = n_distinct(accepted_name),
          color_sp = highcharter::colorize(accepted_name,
                              colors = create_family_pal(col = color_fam, n = n_taxa))) |> 
@@ -1104,12 +1332,11 @@ hc_data <- taxa_summary |>
   mutate_if(is.numeric, round, 1) |> 
   arrange(desc(family)) |> 
   group_by(family) |> 
-  arrange(desc(avg_biomass_m2)) 
-
+  arrange(desc(biomass_gm2)) 
 
 data_to_hierarchical(hc_data,
                      c(family, accepted_name), 
-                     avg_biomass_m2, colors = unique(hc_data$color_fam)) |> 
+                     biomass_gm2, colors = unique(hc_data$color_fam)) |> 
   hchart(
     type = "treemap",
     allowDrillToNode = TRUE,
@@ -1133,7 +1360,7 @@ library(plotly)
 # 1. Get top 20 families by total biomass
 top_fams <- biomass_by_station_and_family |> 
   group_by(family) |> 
-  summarize(total_biomass = sum(avg_biomass_m2, na.rm = TRUE), .groups = "drop") |> 
+  summarize(total_biomass = sum(biomass_gm2, na.rm = TRUE), .groups = "drop") |> 
   slice_max(total_biomass, n = 20) |> 
   pull(family)
 
@@ -1142,8 +1369,8 @@ plot_data <- biomass_by_station_and_family |>
   left_join(stations |> distinct(ps_station_id, region, subregion), by = "ps_station_id") |>
   mutate(family = if_else(family %in% top_fams, family, "Other")) |> 
   group_by(region, subregion, family) |>
-  summarize(avg_biomass_m2 = round(mean(avg_biomass_m2), 1), .groups = "drop") |>
-  mutate(subregion = fct_reorder(subregion, avg_biomass_m2, .fun = sum, .desc = TRUE))
+  summarize(biomass_gm2 = round(mean(biomass_gm2), 1), .groups = "drop") |>
+  mutate(subregion = fct_reorder(subregion, biomass_gm2, .fun = sum, .desc = TRUE))
 
 # 3. Build family color scale (ensure 'Other' is included)
 fam_colors <- taxa_colors |> 
@@ -1153,7 +1380,7 @@ fam_colors <- taxa_colors |>
   deframe()
 
 # 4. Plot
-p <- ggplot(plot_data, aes(x = subregion, y = avg_biomass_m2, fill = family)) +
+p <- ggplot(plot_data, aes(x = subregion, y = biomass_gm2, fill = family)) +
   geom_col() +
   labs(x = "", y = "Average biomass (g/m²)", fill = "",
        title = "Fish Biomass by Family and Subregion",
@@ -1174,6 +1401,89 @@ ggplotly(p, tooltip = c("x", "y", "fill")) |>
     y = -0.25,
     title = list(text = "")))
 ```
+```{r}
+# Function to create biomass plot for any region
+
+plot_biomass_by_region <- function(data, region_name, n_top_families = 10) {
+  
+  # Filter data for the specified region
+  region_data <- data |> 
+    filter(region == region_name)
+  
+  # Get top n families by median biomass for this region
+  
+  top_n_fams <- region_data |> 
+    group_by(family) |> 
+    summarize(avg_biomass_gm2 = mean(biomass_gm2),
+              median_biomass_gm2 = median(biomass_gm2),
+              .groups = "drop") |> 
+    slice_max(median_biomass_gm2, n = n_top_families)
+  
+  # Define color palette (use existing or generate new ones if needed)
+  
+  family_colors <- c(
+    "Scaridae"       = "#009E73",  # Green – herbivorous parrotfishes
+    "Acanthuridae"   = "#0072B2",  # Blue – surgeonfishes
+    "Lutjanidae"     = "#D55E00",  # Orange – snappers (predators)
+    "Caesionidae"    = "#56B4E9",  # Sky blue – fusiliers (planktivores)
+    "Pomacentridae"  = "#E69F00",  # Amber – damselfishes (ubiquitous)
+    "Labridae"       = "#999999",  # Gray – wrasses (diverse)
+    "Chaetodontidae" = "#F0E442",  # Yellow – butterflyfishes (corallivores)
+    "Epinephelidae"  = "#CC79A7",  # Pink – groupers (top predators)
+    "Lethrinidae"    = "#882255",  # Wine red – emperors (benthic feeders)
+    "Balistidae"     = "#117733",  # Dark green – triggerfishes (tough, spiny)
+    'Other'          = "black"   # Dark gray for other families
+  )
+  
+  # Create plot
+  p <- region_data |> 
+    # Group less common families as "Other"
+    mutate(family = if_else(family %in% top_n_fams$family, family, "Other")) |>
+    # Calculate mean biomass by subregion and family
+    group_by(subregion, family) |>
+    summarize(biomass_gm2 = mean(biomass_gm2),
+              .groups = "drop") |> 
+    # Reorder families by biomass for better visualization
+    ggplot(aes(x = fct_reorder(subregion, biomass_gm2, sum, .desc = TRUE),
+               y = biomass_gm2, 
+               fill = fct_reorder(family, biomass_gm2, .fun = mean, .desc = FALSE))) +
+    geom_col() +
+    labs(x = "", y = "Average biomass (g/m²)", fill = "",
+         title = paste0("Fish Biomass by Family and Subregion - ", region_name),
+         subtitle = "Stacked bar plot showing mean biomass contributions by family") +
+    scale_fill_manual(values = family_colors) +
+    theme_minimal(base_size = 13) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "bottom",
+          legend.box = "horizontal",
+          plot.title = element_text(face = "bold"),
+          panel.grid.major.x = element_blank()) +
+    guides(fill = guide_legend(nrow = 2, byrow = TRUE))
+  
+  # Return the plot
+  return(p)
+}
+
+# Create a joined dataset once (outside the function)
+full_data <- biomass_by_station_and_family |> 
+  left_join(stations |> distinct(ps_station_id, region, subregion), by = "ps_station_id")
+
+# Example usage for Murat region
+murat_plot <- plot_biomass_by_region(full_data, "Murat")
+
+# Save the plot
+ggsave(file.path(exp_path, paste0("figures/uvs_fish_biomass_by_family_by_subregion_Murat.pdf")), 
+       murat_plot, width = 10, height = 8)
+
+# For all regions in the dataset:
+all_regions <- unique(full_data$region)
+for (region_name in all_regions) {
+  p <- plot_biomass_by_region(full_data, region_name)
+  ggsave(file.path(exp_path, paste0("figures/uvs_fish_biomass_by_family_by_subregion_", 
+                                    region_name, ".pdf")), 
+         p, width = 10, height = 8)
+}
+```
 
 ## By Species
 
@@ -1181,18 +1491,26 @@ ggplotly(p, tooltip = c("x", "y", "fill")) |>
 #| label: fig-biomass-scatter
 #| fig-cap: "Frequency, abundance, and biomass by species"
 
+taxa_summary$trophic_group |> unique()
+
+trophic_palette <- c("herbivore/detritivore"  = "#5C9E5C",
+                     "planktivore"      = "#4C9CB2",
+                     "lower_carnivore"  = "#E1B07E",
+                     "top_predator" = "#C75D4D",
+                     "shark"        = "#7E6FAB")
+
 tmp_plot <- taxa_summary |> 
-  mutate(ind_100m2 = 100*avg_count_m2) |> 
+  mutate(density_100m2 = 100*density_m2) |> 
   mutate_if(is.numeric, round, 3) |> 
   mutate(tooltip = c(paste0("Taxa = ", accepted_name,
                             "\n Family = ", family,
                             "\n Frequency (% stations) = ", freq_obs,
-                            "\n Abundance (ind/100m2) = ", ind_100m2,
-                            "\n Biomass (g/m2) = ", avg_biomass_m2))) |> 
+                            "\n Abundance (ind/100m2) = ", density_100m2,
+                            "\n Biomass (g/m2) = ", biomass_gm2))) |> 
   ggplot()+
   ggiraph::geom_point_interactive(aes(x = freq_obs, 
-                                      y = ind_100m2, 
-                                      size = avg_biomass_m2, 
+                                      y = density_100m2, 
+                                      size = biomass_gm2, 
                                       col = trophic_group, 
                                       tooltip = tooltip))+
   scale_color_manual(values = trophic_palette, na.value = "lightgrey")+
@@ -1207,8 +1525,18 @@ tmp_plot <- taxa_summary |>
 ggiraph::girafe(ggobj = tmp_plot)
 ```
 
-
 # Trophic Composition
+
+```{r}
+biomass_by_station_and_trophic <- biomass_by_taxa_and_station |> 
+  group_by(ps_station_id, ps_site_id, exp_id, region , subregion, habitat, exposure, divers, depth_strata, depth_m, trophic_group) |>   
+  summarize(density_m2 = sum(density_m2),
+            biomass_gm2 = sum(biomass_gm2),
+            .groups = "drop") |> 
+  group_by(ps_station_id) |> 
+  mutate(pct_biomass = round(biomass_gm2/sum(biomass_gm2)*100, 2)) |> 
+  ungroup()
+```
 
 ```{r}
 #| label: fig-map-trophic-pies
@@ -1223,65 +1551,31 @@ library(scales)
 library(dplyr)
 library(tidyr)
 
-# Define trophic palette
-trophic_palette <- c("Herbivore/Detritivore"  = "#5C9E5C",
-                     "Planktivore"            = "#4C9CB2",
-                     "Lower-carnivore"        = "#E1B07E",
-                     "Top-predator"           = "#C75D4D",
-                     "Shark"                  = "#7E6FAB",
-                     "Unknown"                = "#D0D0D0")
+# Define the new trophic palette with updated column names
+trophic_palette <- c("pct_herbi_detri"  = "#5C9E5C",
+                     "pct_plankti"      = "#4C9CB2",
+                     "pct_lower_carni"  = "#E1B07E",
+                     "pct_top_predator" = "#C75D4D",
+                     "pct_shark"        = "#7E6FAB")
 
-# Step 1: Summarize station-level biomass by trophic group
-
-biomass_by_station_and_trophic <- biomass_by_station_and_taxa |> 
-  group_by(ps_station_id, depth_strata, trophic_group) |> 
-  summarize(total_biomass_m2 = sum(avg_biomass_m2, na.rm = TRUE),
-            total_count_m2   = sum(avg_count_m2, na.rm = TRUE),
-            .groups = "drop") |> 
-  group_by(ps_station_id, depth_strata) |> 
-  mutate(frac_biomass = total_biomass_m2 / sum(total_biomass_m2),
-         frac_count   = total_count_m2 / sum(total_count_m2)) |> 
-  ungroup() |> 
-  left_join(stations |> distinct(ps_station_id, region, subregion),
-            by = "ps_station_id")
-
-# Step 2: Summarize to site-level biomass by trophic group
-biomass_by_site_and_trophic <- biomass_by_station_and_trophic |> 
-  left_join(stations |> select(ps_station_id, ps_site_id, region, subregion),
-            by = "ps_station_id") |>
-  mutate(trophic_group = replace_na(trophic_group, "Unknown")) |>
-  group_by(ps_site_id, trophic_group) |>
-  summarize(avg_biomass_m2 = round(mean(total_biomass_m2, na.rm = TRUE), 4),
+# Step 1: Summarize at the site level
+site_biomass_summary <- stations |> 
+  group_by(ps_site_id) |> 
+  summarize(across(contains("gm2") | contains("pct"), 
+                   ~ round(mean(.x, na.rm = TRUE), 2)),
             .groups = "drop")
 
-# Step 3: Create trophic proportion matrix
-trophic_props <- biomass_by_site_and_trophic |>
-  group_by(ps_site_id) |>
-  mutate(frac_biomass = avg_biomass_m2 / sum(avg_biomass_m2)) |>
-  ungroup() |>
-  select(ps_site_id, trophic_group, frac_biomass) |>
-  pivot_wider(names_from = trophic_group, values_from = frac_biomass, values_fill = 0) |> 
-  select(ps_site_id, all_of(names(trophic_palette)))
-
-# Step 4: Add site metadata
+# Step 2: Merge site locations
 site_locations <- uvs_sites |> 
   distinct(ps_site_id, region, subregion, latitude, longitude)
 
-# Merge and scale pie sizes by biomass
-trophic_map_data <- trophic_props |>
-  left_join(site_locations, by = "ps_site_id") |> 
-  drop_na(latitude, longitude)
+# Step 3: Merge the new trophic data with site metadata
+trophic_map_data <- site_biomass_summary |>
+  left_join(site_locations, by = "ps_site_id") |>
+  drop_na(latitude, longitude) |> 
+  mutate(pie_size = rescale(log1p(biomass_gm2), to = c(5, 30)))  # log scale to dampen skew
 
-# Step 5: Total biomass for size scaling
-total_biomass_by_site <- biomass_by_site_and_trophic |>
-  group_by(ps_site_id) |>
-  summarize(total_biomass = sum(avg_biomass_m2), .groups = "drop")
-
-trophic_map_data <- trophic_map_data |>
-  left_join(total_biomass_by_site, by = "ps_site_id") |>
-  mutate(pie_size = rescale(log1p(total_biomass), to = c(5, 30)))  # log scale to dampen skew
-
-# Step 6: Extract numeric matrix of trophic group proportions
+# Step 4: Extract the trophic proportion matrix
 trophic_matrix <- trophic_map_data |> 
   select(all_of(names(trophic_palette))) |> 
   as.matrix()
@@ -1289,18 +1583,34 @@ trophic_matrix <- trophic_map_data |>
 # Sanity check
 stopifnot(identical(colnames(trophic_matrix), names(trophic_palette)))
 
-# Step 7: Render interactive pie chart map
+# Step 5: Create hover labels with percentages
+hover_labels <- paste0(
+  "<strong>Site:</strong> ", trophic_map_data$ps_site_id, "<br/>",
+  "<strong>Region:</strong> ", trophic_map_data$region, "<br/>",
+  "<strong>Subregion:</strong> ", trophic_map_data$subregion, "<br/>",
+  "<strong>Total Biomass (g/m²):</strong> ", trophic_map_data$biomass_gm2, "<br/><br/>",
+  "<strong>Trophic Composition (%):</strong><br/>",
+  "Herbivore/Detritivore: ", trophic_map_data$pct_herbi_detri, "%<br/>",
+  "Planktivore: ", trophic_map_data$pct_plankti, "%<br/>",
+  "Lower Carnivore: ", trophic_map_data$pct_lower_carni, "%<br/>",
+  "Top Predator: ", trophic_map_data$pct_top_predator, "%<br/>",
+  "Shark: ", trophic_map_data$pct_shark, "%"
+)
+
+# Step 6: Render interactive pie chart map
 leaflet(data = trophic_map_data) |>
   addProviderTiles(providers$Esri.WorldImagery) |>
   addMinicharts(lng = trophic_map_data$longitude,
                 lat = trophic_map_data$latitude,
                 chartdata = trophic_matrix,
                 type = "pie",
-                colorPalette = unname(trophic_palette),  # Use unname to avoid name mismatch bug
+                colorPalette = unname(trophic_palette),
                 width = trophic_map_data$pie_size,
                 height = trophic_map_data$pie_size,
-                showLabels = FALSE) |> 
-  addFullscreenControl(position = "topright") 
+                showLabels = FALSE,
+                popup = popupArgs(html = hover_labels)) |> 
+  addFullscreenControl(position = "topright")
+
 ```
 
 This section explores the distribution of fish biomass and abundance across major trophic groups, offering insight into the functional structure of reef fish assemblages and potential indicators of ecosystem health.
@@ -1316,18 +1626,21 @@ library(plotly)
 #| fig-width: 10
 #| fig-height: 8
 
-biomass_by_region_and_trophic <- biomass_by_station_and_trophic |> 
-  group_by(region, subregion, trophic_group) |>
-  summarize(avg_biomass_m2 = mean(total_biomass_m2),
-            avg_count_m2   = mean(total_count_m2),
-            .groups = "drop") 
+trophic_palette <- c("herbivore/detritivore"  = "#5C9E5C",
+                     "planktivore"      = "#4C9CB2",
+                     "lower_carnivore"  = "#E1B07E",
+                     "top_predator" = "#C75D4D",
+                     "shark"        = "#7E6FAB")
 
-p <- biomass_by_region_and_trophic |> 
-  ggplot(aes(fct_reorder(subregion, avg_count_m2, sum, .desc = T), avg_count_m2, fill = trophic_group))+
+p <- biomass_by_station_and_trophic |> 
+  group_by(region, subregion, trophic_group) |> 
+  summarize(density_m2 = mean(density_m2),
+            .groups = "drop") |> 
+  ggplot(aes(fct_reorder(subregion, density_m2, sum, .desc = T), density_m2, fill = trophic_group))+
   geom_col(aes(text = paste0("Region: ", region, "<br>",
                              "Subregion: ", subregion, "<br>",
                              "Trophic group: ", trophic_group, "<br>",
-                             "Avg. Abundance: ", round(avg_count_m2, 2), " ind/m²")))+
+                             "Avg. Abundance: ", round(density_m2, 2), " ind/m²")))+
   facet_wrap(~region, ncol = 4, scales = "free_x") +
   labs(x = "", y = "Average Abundance (in/m²)", fill = "",
        title = "Average fish Abundance by trophic group and region",
@@ -1357,30 +1670,25 @@ ggplotly(p, tooltip = "text") |>
 #| 
 library(plotly)
 
-# Prepare the summarized data
-plot_data <- biomass_by_station_and_trophic |>
-  group_by(region, subregion, trophic_group) |>
-  summarize(avg_biomass_m2 = mean(total_biomass_m2), .groups = "drop") |>
-  mutate(subregion = fct_reorder(subregion, avg_biomass_m2, .fun = sum, .desc = TRUE))
-
 # Build the ggplot
-p <- ggplot(plot_data, 
-            aes(x = subregion, y = avg_biomass_m2, fill = trophic_group)) +
-  geom_col(aes(text = paste0(
-    "Region: ", region, "<br>",
-    "Subregion: ", subregion, "<br>",
-    "Trophic group: ", trophic_group, "<br>",
-    "Avg. biomass: ", round(avg_biomass_m2, 2), " g/m²"
-  ))) +
+p <- biomass_by_station_and_trophic |> 
+  group_by(region, subregion, trophic_group) |> 
+  summarize(biomass_gm2 = mean(biomass_gm2),
+            .groups = "drop") |> 
+  ggplot(aes(fct_reorder(subregion, biomass_gm2, sum, .desc = T), biomass_gm2, fill = trophic_group))+
+  geom_col(aes(text = paste0("Region: ", region, "<br>",
+                             "Subregion: ", subregion, "<br>",
+                             "Trophic group: ", trophic_group, "<br>",
+                             "Avg. Biomass: ", round(biomass_gm2, 2), " g/m²")))+
   facet_wrap(~region, ncol = 4, scales = "free_x") +
-  labs(x = "", y = "Average biomass (g/m²)", fill = "",
-       title = "Average fish biomass by trophic group and region",
-       subtitle = "Stacked bar plots show the contribution of each trophic group to total biomass") +
-  scale_fill_manual(values = trophic_palette) +
+  labs(x = "", y = "Average Biomass (g/m²)", fill = "",
+       title = "Average fish Biomass by trophic group and region",
+       subtitle = "Stacked bar plots show the contribution of each trophic group to total biomass")+
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
         legend.position = "bottom",
-        legend.box = "horizontal") +
-  guides(fill = guide_legend(nrow = 1, byrow = TRUE))
+        legend.box = "horizontal")+
+  guides(fill = guide_legend(nrow = 1, byrow = TRUE))+
+  scale_fill_manual(values = trophic_palette)
 
 # Convert to plotly with tooltips
 ggplotly(p, tooltip = "text") |> 
@@ -1393,6 +1701,187 @@ ggplotly(p, tooltip = "text") |>
 
 :::
 
+
+```{r}
+trophic_colors <- c("herbivore/detritivore" = "#009E73",  # Green for herbivores/detritivores
+                    "lower_carnivore"       = "#E69F00",  # Amber for lower carnivores
+                    "planktivore"           = "#56B4E9",  # Sky blue for planktivores
+                    "shark"                 = "#D55E00",  # Orange/red for sharks
+                    "top_predator"          = "#CC79A7" )  # Pink/purple for top predators
+
+# Create nicer labels for the legend
+  trophic_labels <- c(
+    "herbivore/detritivore" = "Herbivore/Detritivore",
+    "lower_carnivore"       = "Lower Carnivore",
+    "planktivore"           = "Planktivore", 
+    "shark"                 = "Shark",
+    "top_predator"          = "Top Predator"
+  )
+
+# Function to create biomass plot for any region
+
+create_trophic_biomass_plot <- function(region_name) {
+  
+  # Get data for the specified region
+  region_data <- biomass_by_station_and_trophic |> 
+    filter(region == region_name)
+  
+  # Create plot
+  p <- region_data |> 
+    group_by(subregion, trophic_group) |>
+    summarize(biomass_gm2 = mean(biomass_gm2),
+              .groups = "drop") |> 
+    ggplot(aes(x = fct_reorder(subregion,biomass_gm2,sum, .desc = TRUE),
+               y = biomass_gm2, 
+               fill = fct_reorder(trophic_group, biomass_gm2, mean, .desc = FALSE))) +
+    geom_col(position = "fill") +
+    labs(x = "", y = "Average biomass (g/m²)", fill = "",
+         title = paste0("Fish Biomass by Trophic Group and Subregion - ", region_name),
+         subtitle = "Stacked bar plot showing mean biomass contributions by trophic group") +
+    scale_fill_manual(values = trophic_colors, labels = trophic_labels) +
+    theme_minimal(base_size = 13) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1))+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "bottom",
+          legend.box = "horizontal",
+          panel.grid.major.x = element_blank(),
+          plot.title = element_text(face = "bold")) +
+    guides(fill = guide_legend(nrow = 1, byrow = TRUE))
+  
+  return(p)
+
+}
+
+murat_trophic_plot <- create_trophic_biomass_plot(region_name = "Lovongai")
+
+# Get all unique regions in the dataset
+all_regions <- unique(biomass_by_station_and_trophic$region)
+
+# Create a filename-safe version of region names (replacing spaces with underscores)
+safe_region_names <- gsub(" ", "_", all_regions)
+
+# Iterate through all regions and create plots
+for (i in seq_along(all_regions)) {
+  # Get the current region name and its safe version for filenames
+  region_name <- all_regions[i]
+  safe_name <- safe_region_names[i]
+  
+  # Create the plot
+  p <- create_trophic_biomass_plot(region_name)
+  
+  # Generate the file path with safe filename
+  file_path <- file.path(exp_path, paste0("figures/uvs_fish_biomass_by_trophic_by_subregion_", 
+                                         safe_name, ".pdf"))
+  
+  # Save the plot
+  ggsave(file_path, p, width = 10, height = 8)
+  
+  # Optional: print progress message
+  message(paste0("Created plot for region: ", region_name))
+}
+```
+
+```{r}
+# Define color palette for the specific trophic groups
+trophic_colors <- c(
+  "herbivore/detritivore" = "#009E73",  # Green
+  "lower_carnivore"       = "#E69F00",  # Amber 
+  "planktivore"           = "#56B4E9",  # Sky blue
+  "shark"                 = "#D55E00",  # Orange/red
+  "top_predator"          = "#CC79A7"   # Pink/purple
+)
+
+# Create nicer labels for the legend
+trophic_labels <- c(
+  "herbivore/detritivore" = "Herbivore/Detritivore",
+  "lower_carnivore"       = "Lower Carnivore",
+  "planktivore"           = "Planktivore", 
+  "shark"                 = "Shark",
+  "top_predator"          = "Top Predator"
+)
+  
+# Function to create biomass plots by trophic group with option for absolute or percent
+
+create_trophic_biomass_plot <- function(region_name, show_percent = FALSE) {
+  
+  # Get data for the specified region
+  region_data <- biomass_by_station_and_trophic |> 
+    filter(region == region_name)
+  
+  # Process data
+  plot_data <- region_data |> 
+    group_by(subregion, trophic_group) |>
+    summarize(biomass_gm2 = mean(biomass_gm2),
+              .groups = "drop")
+  
+  # Set up position and labels based on show_percent parameter
+  position_type <- if(show_percent) "fill" else "stack"
+  
+  y_label <- if(show_percent) "Percent of total biomass" else "Average biomass (g/m²)"
+  
+  plot_title <- if(show_percent) 
+                paste0("Relative Fish Biomass by Trophic Group - ", region_name) else
+                paste0("Fish Biomass by Trophic Group and Subregion - ", region_name)
+  
+  subtitle <- if(show_percent) 
+              "Percent contribution of each trophic group to total biomass" else
+              "Stacked bar plot showing mean biomass contributions by trophic group"
+  
+  # Create y-axis scale based on show_percent
+  
+  y_scale <- if(show_percent) {
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                      expand = expansion(mult = c(0, 0.01)))
+  } else {
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+  }
+              
+  # Create plot
+  p <- plot_data |> 
+    ggplot(aes(x = fct_reorder(subregion, biomass_gm2, sum, .desc = TRUE),
+               y = biomass_gm2, 
+               fill = fct_reorder(trophic_group, biomass_gm2, mean, .desc = FALSE))) +
+    geom_col(position = position_type) +
+    labs(x = "", y = y_label, fill = "",
+         title = plot_title,
+         subtitle = subtitle) +
+    scale_fill_manual(values = trophic_colors, labels = trophic_labels) +
+    y_scale +
+    theme_minimal(base_size = 13) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "bottom",
+          legend.box = "horizontal",
+          panel.grid.major.x = element_blank(),
+          plot.title = element_text(face = "bold")) +
+    guides(fill = guide_legend(nrow = 1, byrow = TRUE))
+  
+  return(p)
+}
+
+# Get all unique regions in the dataset
+all_regions <- unique(biomass_by_station_and_trophic$region)
+
+# Iterate through all regions and create both types of plots
+for (i in seq_along(all_regions)) {
+  region_name <- all_regions[i]
+  safe_name <- gsub(" ", "_", region_name)
+  
+  # Create absolute biomass plot
+  p_absolute <- create_trophic_biomass_plot(region_name, show_percent = FALSE)
+  absolute_file_path <- file.path(exp_path, paste0("figures/uvs_fish_biomass_by_trophic_by_subregion_", 
+                                                  safe_name, ".pdf"))
+  ggsave(absolute_file_path, p_absolute, width = 10, height = 8)
+  
+  # Create percentage biomass plot
+  p_percent <- create_trophic_biomass_plot(region_name, show_percent = TRUE)
+  percent_file_path <- file.path(exp_path, paste0("figures/uvs_fish_percent_biomass_by_trophic_by_subregion_", 
+                                                 safe_name, ".pdf"))
+  ggsave(percent_file_path, p_percent, width = 10, height = 8)
+  
+  message(paste0("Created both absolute and percentage plots for region: ", region_name))
+}
+```
+
 To test whether the relative biomass of trophic groups differed significantly among regions, we used Kruskal-Wallis tests for each group. Only planktivores showed a moderate regional effect (χ² = 9.16, p = 0.027). Post hoc comparisons indicated that the proportional biomass of planktivores was higher in Lovongai than in other regions, but these differences did not remain significant after correcting for multiple comparisons (padj = 0.051 for Lovongai vs Western Islands). 
 
 Across all regions, top predators contributed only a small fraction of total fish biomass. Median values ranged from 2–3%, with mean contributions below 10% in all regions (@fig-troph-prop-by-region). Sharks were virtually absent from surveys and represented < 1% of the biomass. The low predator biomass is a potential warning sign of trophic downgrading and ecosystem stress
@@ -1401,21 +1890,21 @@ Across all regions, top predators contributed only a small fraction of total fis
 kruskal_results <- biomass_by_station_and_trophic |>
   filter(!is.na(trophic_group)) |> 
   group_by(trophic_group) |> 
-  rstatix::kruskal_test(frac_biomass ~ region)
+  rstatix::kruskal_test(pct_biomass ~ region)
 
 # Filter for Planktivores and run pairwise comparisons
 dunn_results <- biomass_by_station_and_trophic |> 
   ungroup() |> 
-  filter(trophic_group == "Planktivore") |> 
+  filter(trophic_group == "planktivore") |> 
   mutate(region = as.factor(region)) |> 
-  rstatix::dunn_test(frac_biomass ~ region, p.adjust.method = "bonferroni")
+  rstatix::dunn_test(pct_biomass ~ region, p.adjust.method = "bonferroni")
 
 pop_biomass_by_trophic_plot <- biomass_by_station_and_trophic |> 
   filter(!is.na(trophic_group)) |> 
   ggplot() +
-  geom_boxplot(aes(x = region, y = frac_biomass, fill = trophic_group),
+  geom_boxplot(aes(x = region, y = pct_biomass, fill = trophic_group),
                outlier.shape = NA, alpha = 0.6)+
-  geom_jitter(aes(x = region, y = frac_biomass, color = trophic_group),
+  geom_jitter(aes(x = region, y = pct_biomass, color = trophic_group),
               position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75),
               size = 1.5,
               alpha = 0.6,
@@ -1446,12 +1935,12 @@ library(plotly)
 library(dplyr)
 
 # 1. Compute summary stats per group
-summary_data <- biomass_by_station_and_trophic %>%
+pct_biomass_trophic_region <- biomass_by_station_and_trophic %>%
   filter(!is.na(trophic_group)) %>%
   group_by(region, trophic_group) %>%
-  summarise(median = round(median(frac_biomass), 2),
-            iqr    = round(IQR(frac_biomass), 2),
-            mean   = round(mean(frac_biomass), 2),
+  summarise(median = round(median(pct_biomass), 2),
+            iqr    = round(IQR(pct_biomass), 2),
+            mean   = round(mean(pct_biomass), 2),
           .groups = "drop") %>%
   mutate(hover_text = paste0("Region: ", region, "<br>",
                              "Trophic group: ", trophic_group, "<br>",
@@ -1462,12 +1951,12 @@ summary_data <- biomass_by_station_and_trophic %>%
 # 2. Join the hover text back to the main data
 plot_data <- biomass_by_station_and_trophic %>%
   filter(!is.na(trophic_group)) %>%
-  left_join(summary_data, by = c("region", "trophic_group"))
+  left_join(pct_biomass_trophic_region, by = c("region", "trophic_group"))
 
 # 3. Interactive boxplot
 fig <- plot_ly(data = plot_data,
                x = ~region,
-               y = ~frac_biomass,
+               y = ~pct_biomass,
                color = ~trophic_group,
                text = ~hover_text,
                type = "box",
@@ -1481,8 +1970,8 @@ fig <- plot_ly(data = plot_data,
 # 4. Layout
 fig <- fig %>%
   layout(boxmode = "group",
-         title = list(text = "Proportion of Biomass by Trophic Group and Region"),
-         yaxis = list(title = "Proportion of Total Biomass"),
+         title = list(text = "% of Biomass by Trophic Group and Region"),
+         yaxis = list(title = "% of Total Biomass"),
          legend = list(orientation = "h", x = 0.5, xanchor = "center", y = -0.25),
          margin = list(b = 80))
 
@@ -1493,8 +1982,8 @@ We evaluated multivariate differences in trophic structure using PERMANOVA. Dept
 
 ```{r}
 trophic_matrix <- biomass_by_station_and_trophic |>
-  select(ps_station_id, trophic_group, frac_biomass) |>
-  pivot_wider(names_from = trophic_group, values_from = frac_biomass, values_fill = 0) |>
+  select(ps_station_id, trophic_group, pct_biomass) |>
+  pivot_wider(names_from = trophic_group, values_from = pct_biomass, values_fill = 0) |>
   column_to_rownames("ps_station_id")
 
 trophic_meta <- biomass_by_station_and_trophic |>
@@ -1606,15 +2095,12 @@ ggplot(nmds_coords, aes(x = NMDS1, y = NMDS2, color = region)) +
 A permutational multivariate analysis of variance (PERMANOVA) revealed significant effects of both depth strata and region on species-level fish community structure (Bray-Curtis dissimilarity). Together, they explained approximately 8.2% of the variation in community composition: Depth strata accounted for 3.0% of the variation (F = 2.65, p = 0.001) and	Region explained an additional 5.1% (F = 2.99, p = 0.001),
 
 ```{r}
-spp_matrix <- biomass_by_station_and_taxa |>
-  select(ps_station_id, accepted_name, avg_biomass_m2) |>
-  pivot_wider(names_from = accepted_name, values_from = avg_biomass_m2, values_fill = 0) |>
+spp_matrix <- biomass_by_taxa_and_station |>
+  select(ps_station_id, accepted_name, biomass_gm2) |>
+  pivot_wider(names_from = accepted_name, values_from = biomass_gm2, values_fill = 0) |>
   column_to_rownames("ps_station_id")
 
-spp_meta <- biomass_by_station_and_taxa |>
-  left_join(stations |> 
-              distinct(ps_station_id, region), 
-            by = "ps_station_id") |>
+spp_meta <- biomass_by_taxa_and_station |>
   distinct(ps_station_id, region, depth_strata) |>
   filter(ps_station_id %in% rownames(spp_matrix)) |> 
   arrange(match(ps_station_id, rownames(spp_matrix)))
@@ -1636,7 +2122,7 @@ adonis_spp <- adonis2(spp_matrix ~  depth_strata + region,
 spp_matrix_filtered <- spp_matrix[, apply(spp_matrix, 2, sd) > 0]
 
 # 1. NMDS on species matrix
-spp_nmds <- metaMDS(spp_matrix_filtered, distance = "bray", k = 3, trymax = 100, trace = 0)
+spp_nmds <- metaMDS(log1p(spp_matrix_filtered), distance = "bray", k = 3, trymax = 100, trace = 0)
 
 # 2. Fit species vectors
 spp_fit <- envfit(spp_nmds, spp_matrix_filtered, permutations = 999)
@@ -1783,399 +2269,35 @@ plot_simper_by_focal("Lovongai")
 # Summary Taxa tables
 
 ```{r}
-# --- Taxon-level summary by region ------------------------------------
-
-taxa_summary_by_region <- biomass_by_station_and_taxa |> 
-  left_join(stations |> distinct(ps_station_id, region, subregion), by = "ps_station_id") |>
-  group_by(region, trophic_group, order, family, accepted_name) |> 
+taxa_summary_by_region <- biomass_by_taxa_and_station |> 
+  group_by(region, trophic_group, family, accepted_name) |> 
   summarise(
-    total_count   = sum(total_count, na.rm = TRUE),
-    avg_length_wm = mean(avg_length_wm, na.rm = TRUE),
-    avg_count     = mean(avg_count, na.rm = TRUE),
-    freq_obs      = 100 * sum(avg_count_m2 > 0, na.rm = TRUE) / n(),
-    avg_biomass_m2 = mean(avg_biomass_m2, na.rm = TRUE),
-    avg_count_m2   = mean(avg_count_m2, na.rm = TRUE),
-    .groups = "drop"
-  ) |> 
-  left_join(
-    biomass_per_obs |> 
-      left_join(stations |> distinct(ps_station_id, region), by = "ps_station_id") |> 
-      group_by(region, accepted_name) |> 
-      summarise(
-        min_tl_cm = min(avg_length, na.rm = TRUE),
-        max_tl_cm = max(avg_length, na.rm = TRUE),
-        .groups = "drop"
-      ),
-    by = c("region", "accepted_name")
-  ) |> 
-  mutate(across(
-    c(freq_obs, avg_count, avg_biomass_m2, avg_count_m2, avg_length_wm),
-    ~ round(.x, 6)
-  ))
+    freq_obs = round(100 * sum(total_count > 0) / n(), 2),
+    total_count = sum(total_count),
+    avg_count = round(mean(avg_count, na.rm = TRUE), 3),
+    # For length columns, check if total_count is zero first
+    avg_length_cm = if(sum(total_count) == 0) NA_real_ else round(mean(avg_length_cm, na.rm = TRUE)),
+    min_length_cm = if(sum(total_count) == 0) NA_real_ else min(min_length_cm, na.rm = TRUE),
+    max_length_cm = if(sum(total_count) == 0) NA_real_ else max(max_length_cm, na.rm = TRUE),
+    # For density and biomass, keep the same approach
+    across(c("density_m2", "biomass_gm2"), ~ mean(.x, na.rm = TRUE)),
+    .groups = "drop")
 
-
-# --- Family-level summary by region -----------------------------------
+write_csv(taxa_summary_by_region, file.path(exp_path, "data/primary/output/uvs_fish_taxa_summary_by_region.csv"))
 
 family_summary_by_region <- biomass_by_station_and_family |> 
-  left_join(stations |> distinct(ps_station_id, region, subregion), by = "ps_station_id") |> 
-  group_by(region, order, family) |> 
-  summarise(
-    freq_obs       = 100 * n_distinct(ps_station_id[avg_count_m2 > 0]) / n_distinct(ps_station_id),
-    avg_count      = mean(avg_count, na.rm = TRUE),
-    avg_count_m2   = mean(avg_count_m2, na.rm = TRUE),
-    avg_biomass_m2 = mean(avg_biomass_m2, na.rm = TRUE),
-    .groups = "drop"
-  ) |> 
-  left_join(
-    biomass_by_station_and_taxa |> 
-      left_join(stations |> distinct(ps_station_id, region), by = "ps_station_id") |> 
-      group_by(region, order, family) |> 
-      summarise(
-        total_count = sum(total_count, na.rm = TRUE),
-        n_taxa      = n_distinct(accepted_name[avg_count_m2 > 0]),
-        .groups = "drop"
-      ),
-    by = c("region", "order", "family")
-  ) |> 
-  mutate(across(
-    c(avg_count, avg_count_m2, avg_biomass_m2, freq_obs),
-    ~ round(.x, 6)
-  )) |> 
-  select(region, order, family, n_taxa, total_count, everything())
+  left_join(stations |> select(ps_station_id, region, subregion), by = "ps_station_id") |>
+  group_by(region, family) |> 
+  summarise(freq_obs         = round(100*sum(total_count > 0)/n(),2),
+            total_count      = sum(total_count),
+            avg_count        = round(mean(avg_count), 3),
+            avg_density_m2   = mean(density_m2),
+            avg_biomass_gm2  = mean(biomass_gm2),
+            .groups = "drop") 
+
+write_csv(family_summary_by_region, file.path(exp_path, "data/primary/output/uvs_fish_family_summary_by_region.csv"))
+
 ```
 
-## By Species
 
-::: {.panel-tabset}
 
-### Lovongai
-
-```{r}
-# Filter Lovongai data
-lovongai_tbl <- taxa_summary_by_region |> 
-  filter(region == "Lovongai", avg_biomass_m2 > 0) |>
-  arrange(desc(avg_biomass_m2)) |> 
-  mutate(`Accepted name`             = accepted_name,
-         `Family`                    = family,
-         `Total count`               = total_count,
-         `Avg. count`                = round(avg_count, 2),
-         `Freq. occurrence (%)`      = round(freq_obs, 2),
-         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
-         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3),
-         `Mean TL (cm)`              = avg_length_wm,
-         `Min TL (cm)`               = min_tl_cm,
-         `Max TL (cm)`               = max_tl_cm) |>
-  select(family, `Accepted name`, `Total count`, `Avg. count`,
-         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`,
-         `Mean TL (cm)`, `Min TL (cm)`, `Max TL (cm)`)
-
-# Render reactable
-reactable(lovongai_tbl,
-          filterable      = TRUE,
-          pagination      = TRUE,
-          defaultPageSize = 10,
-          striped         = TRUE,
-          highlight       = TRUE,
-          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
-          theme           = custom_tbl_theme,
-          columns         = list(
-            family = colDef(name = "Family", minWidth = 150),
-            `Accepted name` = colDef(name = "Accepted name",
-                                     cell = function(value) htmltools::tags$i(value),
-                                     minWidth = 180),
-            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
-            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
-            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
-  add_title("Fish species") |>
-  add_subtitle("Summary of fish species observed in Lovongai",
-               font_size  = 20,
-               font_color = "#666666",
-               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
-```
-
-### Murat
-
-```{r}
-# Filter Murat data
-murat_tbl <- taxa_summary_by_region |> 
-  filter(region == "Murat", avg_biomass_m2 > 0) |>
-  mutate(`Accepted name`             = accepted_name,
-         `Family`                    = family,
-         `Total count`               = total_count,
-         `Avg. count`                = round(avg_count, 2),
-         `Freq. occurrence (%)`      = round(freq_obs, 2),
-         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
-         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3),
-         `Mean TL (cm)`              = avg_length_wm,
-         `Min TL (cm)`               = min_tl_cm,
-         `Max TL (cm)`               = max_tl_cm) |>
-  select(family, `Accepted name`, `Total count`, `Avg. count`,
-         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`,
-         `Mean TL (cm)`, `Min TL (cm)`, `Max TL (cm)`)
-
-# Render reactable
-reactable(murat_tbl,
-          filterable      = TRUE,
-          pagination      = TRUE,
-          defaultPageSize = 10,
-          striped         = TRUE,
-          highlight       = TRUE,
-          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
-          theme           = custom_tbl_theme,
-          columns         = list(
-            family = colDef(name = "Family", minWidth = 150),
-            `Accepted name` = colDef(name = "Accepted name",
-                                     cell = function(value) htmltools::tags$i(value),
-                                     minWidth = 180),
-            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
-            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
-            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
-  add_title("Fish species") |>
-  add_subtitle("Summary of fish species observed in Murat",
-               font_size  = 20,
-               font_color = "#666666",
-               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
-```
-
-### Manus
-
-```{r}
-# Filter Manus data
-manus_tbl <- taxa_summary_by_region |> 
-  filter(region == "Manus", avg_biomass_m2 > 0) |>
-  mutate(`Accepted name`             = accepted_name,
-         `Family`                    = family,
-         `Total count`               = total_count,
-         `Avg. count`                = round(avg_count, 2),
-         `Freq. occurrence (%)`      = round(freq_obs, 2),
-         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
-         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3),
-         `Mean TL (cm)`              = avg_length_wm,
-         `Min TL (cm)`               = min_tl_cm,
-         `Max TL (cm)`               = max_tl_cm) |>
-  select(family, `Accepted name`, `Total count`, `Avg. count`,
-         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`,
-         `Mean TL (cm)`, `Min TL (cm)`, `Max TL (cm)`)
-
-# Render reactable
-reactable(manus_tbl,
-          filterable      = TRUE,
-          pagination      = TRUE,
-          defaultPageSize = 10,
-          striped         = TRUE,
-          highlight       = TRUE,
-          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
-          theme           = custom_tbl_theme,
-          columns         = list(
-            family = colDef(name = "Family", minWidth = 150),
-            `Accepted name` = colDef(name = "Accepted name",
-                                     cell = function(value) htmltools::tags$i(value),
-                                     minWidth = 180),
-            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
-            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
-            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
-  add_title("Fish species") |>
-  add_subtitle("Summary of fish species observed in Manus",
-               font_size  = 20,
-               font_color = "#666666",
-               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
-```
-
-### Western Islands
-
-```{r}
-# Filter Murat data
-islands_tbl <- taxa_summary_by_region |> 
-  filter(region == "Western Islands", avg_biomass_m2 > 0) |>
-  mutate(`Accepted name`             = accepted_name,
-         `Family`                    = family,
-         `Total count`               = total_count,
-         `Avg. count`                = round(avg_count, 2),
-         `Freq. occurrence (%)`      = round(freq_obs, 2),
-         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
-         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3),
-         `Mean TL (cm)`              = avg_length_wm,
-         `Min TL (cm)`               = min_tl_cm,
-         `Max TL (cm)`               = max_tl_cm) |>
-  select(family, `Accepted name`, `Total count`, `Avg. count`,
-         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`,
-         `Mean TL (cm)`, `Min TL (cm)`, `Max TL (cm)`)
-
-# Render reactable
-reactable(islands_tbl,
-          filterable      = TRUE,
-          pagination      = TRUE,
-          defaultPageSize = 20,
-          striped         = TRUE,
-          highlight       = TRUE,
-          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
-          theme           = custom_tbl_theme,
-          columns         = list(
-            family = colDef(name = "Family", minWidth = 150),
-            `Accepted name` = colDef(name = "Accepted name",
-                                     cell = function(value) htmltools::tags$i(value),
-                                     minWidth = 180),
-            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
-            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
-            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
-  add_title("Fish species") |>
-  add_subtitle("Summary of fish species observed in the Western Islands",
-               font_size  = 20,
-               font_color = "#666666",
-               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
-```
-
-:::
-
-## By family
-
-::: {.panel-tabset}
-
-### Lovongai
-
-```{r}
-# Filter Lovongai data
-lovongai_tbl <- family_summary_by_region |> 
-  filter(region == "Lovongai", avg_biomass_m2 > 0) |>
-  arrange(desc(avg_biomass_m2)) |> 
-  mutate(`Family`                    = family,
-         `Total count`               = total_count,
-         `Avg. count`                = round(avg_count, 2),
-         `Freq. occurrence (%)`      = round(freq_obs, 2),
-         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
-         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3)) |>
-  select(family, `Total count`, `Avg. count`,
-         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`)
-
-# Render reactable
-reactable(lovongai_tbl,
-          filterable      = TRUE,
-          pagination      = TRUE,
-          defaultPageSize = 10,
-          striped         = TRUE,
-          highlight       = TRUE,
-          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
-          theme           = custom_tbl_theme,
-          columns         = list(
-            family = colDef(name = "Family", minWidth = 150),
-            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
-            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
-            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
-  add_title("Fish families") |>
-  add_subtitle("Summary of fish families observed in Lovongai",
-               font_size  = 20,
-               font_color = "#666666",
-               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
-```
-
-### Murat
-
-```{r}
-# Filter Lovongai data
-murat_tbl <- family_summary_by_region |> 
-  filter(region == "Murat", avg_biomass_m2 > 0) |>
-  arrange(desc(avg_biomass_m2)) |> 
-  mutate(`Family`                    = family,
-         `Total count`               = total_count,
-         `Avg. count`                = round(avg_count, 2),
-         `Freq. occurrence (%)`      = round(freq_obs, 2),
-         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
-         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3)) |>
-  select(family, `Total count`, `Avg. count`,
-         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`)
-
-# Render reactable
-reactable(murat_tbl,
-          filterable      = TRUE,
-          pagination      = TRUE,
-          defaultPageSize = 10,
-          striped         = TRUE,
-          highlight       = TRUE,
-          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
-          theme           = custom_tbl_theme,
-          columns         = list(
-            family = colDef(name = "Family", minWidth = 150),
-            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
-            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
-            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
-  add_title("Fish families") |>
-  add_subtitle("Summary of fish families observed in Murat",
-               font_size  = 20,
-               font_color = "#666666",
-               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
-```
-
-### Manus
-
-```{r}
-# Filter Lovongai data
-manus_tbl <- family_summary_by_region |> 
-  filter(region == "Manus", avg_biomass_m2 > 0) |>
-  arrange(desc(avg_biomass_m2)) |> 
-  mutate(`Family`                    = family,
-         `Total count`               = total_count,
-         `Avg. count`                = round(avg_count, 2),
-         `Freq. occurrence (%)`      = round(freq_obs, 2),
-         `Avg. abundance (ind/m²)`   = round(avg_count_m2, 3),
-         `Avg. biomass (g/m²)`       = round(avg_biomass_m2, 3)) |>
-  select(family, `Total count`, `Avg. count`,
-         `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`)
-
-# Render reactable
-reactable(manus_tbl,
-          filterable      = TRUE,
-          pagination      = TRUE,
-          defaultPageSize = 10,
-          striped         = TRUE,
-          highlight       = TRUE,
-          defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
-          theme           = custom_tbl_theme,
-          columns         = list(
-            family = colDef(name = "Family", minWidth = 150),
-            `Freq. occurrence (%)` = colDef(cell = function(value) paste0(value, "%"), align = "center"),
-            `Avg. biomass (g/m²)`  = colDef(cell = function(value) comma(value, accuracy = 0.001)),
-            `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
-  add_title("Fish families") |>
-  add_subtitle("Summary of fish families observed in Manus",
-               font_size  = 20,
-               font_color = "#666666",
-               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
-```
-
-### Western Islands
-
-```{r}
-# Filter Lovongai data
-islands_tbl <- family_summary_by_region |> 
-  filter(region == "Western Islands", avg_biomass_m2 > 0) |>
-  arrange(desc(avg_biomass_m2)) |> 
-  mutate(`Family`                  = family,
-         `Total count`             = total_count,
-         `Avg. count`              = round(avg_count, 2),
-         `Freq. occurrence (%)`    = round(freq_obs, 2),
-         `Avg. abundance (ind/m²)` = round(avg_count_m2, 3),
-         `Avg. biomass (g/m²)`     = round(avg_biomass_m2, 3)) |>
-  select(family, `Total count`, `Avg. count`, `Freq. occurrence (%)`, `Avg. abundance (ind/m²)`, `Avg. biomass (g/m²)`)
-
-# Render reactable
-tmp <- reactable(islands_tbl,
-                 filterable      = TRUE,
-                 pagination      = TRUE,
-                 defaultPageSize = 10,
-                 striped         = TRUE,
-                 highlight       = TRUE,
-                 elementId       = "summary-tbl",
-                 defaultSorted   = list(`Avg. biomass (g/m²)` = "desc"),
-                 theme           = custom_tbl_theme,
-                 columns         = list(family                    = colDef(name = "Family", minWidth = 150),
-                                        `Freq. occurrence (%)`    = colDef(cell = function(value) paste0(value, "%"), align = "center"),
-                                        `Avg. biomass (g/m²)`     = colDef(cell = function(value) comma(value, accuracy = 0.001)),
-                                        `Avg. abundance (ind/m²)` = colDef(cell = function(value) comma(value, accuracy = 0.001)))) |>
-  add_title("Fish families") |>
-  add_subtitle("Summary of fish families observed in the Western Islands",
-               font_size  = 20,
-               font_color = "#666666",
-               margin     = reactablefmtr::margin(t = 10, r = 0, b = 15, l = 0))
-```
-
-:::

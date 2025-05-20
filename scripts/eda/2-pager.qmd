@@ -1,0 +1,138 @@
+---
+title: "Summary 2 pager"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: right
+    code-fold: true
+    theme: cosmo
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
+options(scipen = 999)
+
+# Hook to format inline numeric expressions with comma separators:
+knitr::knit_hooks$set(inline = function(x) {
+  if (!is.numeric(x)) {
+    # For non-numeric values, just return as character
+    return(as.character(x))
+  }
+  # Format numbers with comma as big.mark, no scientific notation
+  format(x, big.mark = ",", scientific = FALSE)
+})
+
+library(PristineSeasR)
+library(sf)
+library(hms)
+library(readxl)
+library(janitor)
+library(lubridate)
+library(gt)
+library(pointblank)
+library(bigrquery)
+library(leaflet)
+library(leaflet.extras)
+library(glue)
+library(lme4)
+library(lmerTest)   # gives p-values for fixed effects
+library(emmeans)
+library(emmeans)
+library(multcomp)
+library(multcompView)
+library(multcomp)
+library(reactable)
+library(scales)
+library(reactablefmtr)
+library(parameters)
+library(tidyverse)
+
+ggthemr::ggthemr("fresh")
+
+ps_paths <- PristineSeasR::get_sci_drive_paths()
+
+exp_id <- "PNG_2024"
+
+exp_path <- file.path(ps_paths$expeditions, str_replace(exp_id, "_", "-"))
+
+bigrquery::bq_auth(email = "marine.data.science@ngs.org")
+
+bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas")
+```
+
+# Biomass Waffle
+
+```{r}
+# Load fish summaries
+
+load(file.path(exp_path, "data/primary/output/fish_summaries.RData"))
+```
+
+```{r}
+library(waffle)
+
+waffle_df <- region_summary |> 
+  select(region, contains("pct")) |> 
+  pivot_longer(cols = -c(region),
+               names_to = c(".value", "trophic_group"),
+               names_pattern = "([a-z]+)_(.*)") |> 
+  left_join(region_summary |> select(region, avg_biomass_m2)) |> 
+  mutate(biomass =  round(avg_biomass_m2*pct/100)) |> 
+  mutate(trophic_group = if_else(trophic_group %in% c("top_predator", "shark"), 
+                                 trophic_group, 
+                                 "other"),
+         # **re‐level here** so shark → top_predator → other
+  trophic_group = fct_relevel(trophic_group, "shark", "top_predator", "other")) 
+
+
+totals <- waffle_df |>
+  distinct(region, avg_biomass_m2) |> 
+  mutate(avg_biomass_m2 = round(avg_biomass_m2)) |> 
+  mutate(cols = ceiling(avg_biomass_m2 / 10))
+
+  
+biomass_waffle <- waffle_df |>   
+ggplot(aes(fill = trophic_group,
+             values = biomass)) +
+  geom_waffle(n_rows = 10,
+              size = 0.33, 
+              flip = F,
+              colour = "white",
+              show.legend = T) +
+  coord_equal() +
+  #theme_enhance_waffle() +
+  facet_wrap(~region, nrow = 1)+
+  theme_void()+
+  # 4. add total‐biomass label just to the right of each waffle
+  geom_text(data = totals,
+            aes(x     = cols,    # half‐cell to the right
+                y     = -2 ,           # mid‐height (since n_rows = 10)
+                label = paste0(avg_biomass_m2, " g/m²")),
+            inherit.aes = FALSE,
+            hjust       = 1,
+            vjust       = 0,
+            size        = 3) +
+  scale_fill_manual(values = c("#DD1C1A", "#0FA3B1", "#FAEDCA"),
+                    name = "")+
+  guides(
+      fill = guide_legend(
+        override.aes = list(size = .5),       # smaller points/tiles
+        keywidth     = unit(0.1, "cm"),
+        keyheight    = unit(0.1, "cm"),
+        nrow         = 1,
+        byrow        = TRUE
+      )
+    )+
+  theme(legend.position      = "bottom")
+    
+
+ggsave(plot     = biomass_waffle,
+       filename = file.path(exp_path, "figures", "biomass_waffle.pdf"),
+       width    = 10, height = 10)
+```
+
+
