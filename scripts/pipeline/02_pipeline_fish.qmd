@@ -141,6 +141,13 @@ raw_obs <- map_dfr(diver_files,
 
 cat("\nObservations loaded:", nrow(raw_obs), "\n")
 cat("Unique species:", n_distinct(raw_obs$accepted_name), "\n")
+
+raw_obs <- raw_obs |> 
+  mutate(diver = str_replace(diver, "ALG", "Allison Green") |>
+           str_replace("JEC", "Jenn Caselle") |> 
+           str_replace("AMF", "Alan Friedlander") |>
+           str_replace("VAS", "Vyvyan Summers") |>
+           str_replace("AJKM", "Andrew Mcinnis"))
 ```
 
 ### Stations

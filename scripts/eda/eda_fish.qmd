@@ -84,17 +84,24 @@ fish_lut <- tbl(bq_connection, "taxonomy.fish") |>
 
 # -- Read fish survey data -----------------------------------------------
 
-stations <- tbl(bq_connection, "uvs.blt_stations") |> 
-  filter(exp_id == "PNG_2024") |> 
-  collect()
+biomass_by_taxa_and_station <- read_csv(file.path(exp_path, "data/primary/output/fish/biomass_by_station_and_taxa.csv"))
 
-observations <- tbl(bq_connection, "uvs.blt_observations") |> 
-  filter(exp_id == "PNG_2024") |> 
-  collect()
+stations <- read_csv(file.path(exp_path, "data/primary/output/fish/station_summary.csv"))
 
-biomass_by_taxa_and_station <- tbl(bq_connection, "uvs.blt_biomass_by_taxa") |> 
-  filter(exp_id == "PNG_2024") |> 
-  collect()
+observations <- read_csv(file.path(exp_path, "data/primary/output/fish/biomass_per_obs.csv"))
+
+# 
+# stations <- tbl(bq_connection, "uvs.blt_stations") |> 
+#   filter(exp_id == "PNG_2024") |> 
+#   collect()
+# 
+# observations <- tbl(bq_connection, "uvs.blt_observations") |> 
+#   filter(exp_id == "PNG_2024") |> 
+#   collect()
+# 
+# biomass_by_taxa_and_station <- tbl(bq_connection, "uvs.blt_biomass_by_taxa") |> 
+#   filter(exp_id == "PNG_2024") |> 
+#   collect()
 
 # -- Add Zeros back in  --------------------------------------------------
 
@@ -417,7 +424,7 @@ diversity_treemap <- hchart(hc_data,
 diversity_treemap
 ```
 
-The most taxonomically rich families in our surveys were **Labridae** (wrasses, n = 80), and **Pomacentridae** (surgeonfishes, n = 78), followed by **Chaetodontidae** (butterflyfishes, n = 35) ,**Acanthuridae** (surgeonfishes, n = 32) and **Scaridae** (parrotfishes, 31) (@tbl-family-summary)
+The most taxonomically rich families in our surveys were **Labridae** (wrasses, n = 79), and **Pomacentridae** (surgeonfishes, n = 78), followed by **Chaetodontidae** (butterflyfishes, n = 35) ,**Acanthuridae** (surgeonfishes, n = 32) and **Scaridae** (parrotfishes, 31) (@tbl-family-summary)
 
 ```{r}
 #| label: tbl-family-summary
@@ -573,8 +580,7 @@ ggplot(accum_curves, aes(x = transect, y = richness, color = region, fill = regi
   theme(legend.position = "bottom")+
   labs(fill = "", col = "")
 ```
-
-Lovongai reaches the highest species richness, exceeding 320 species, followed by Manus and Western Islands at around 300 species, while Murat consistently shows the lowest richness at about 270 species. The narrowing confidence intervals with increased sampling suggest stable and reliable richness estimates at higher transect numbers, revealing clear regional differences in biodiversity.
+Lovongai reaches the highest species richness, exceeding 320 species, followed by Manus (310) and Western Islands with 292 species, while Murat consistently shows the lowest richness at 275 species. The narrowing confidence intervals with increased sampling suggest stable and reliable richness estimates at higher transect numbers, revealing clear regional differences in biodiversity.
 
 #### Differences across depth strata, divers, and regions?
 
@@ -784,6 +790,7 @@ spp_model_emm_diver |>
 
 ## Biodiversity surveys
 
+
 ```{r}
 bio_obs <- read_xlsx(file.path(exp_path, "data", "primary", "raw", "fish", "PNG_2024_fish_fieldbook_ALG_FINAL.xlsx"),
           sheet = "biodiversity observations") |> 
@@ -796,7 +803,7 @@ name_to_accepted_AphiaID <- fish_lut |>
 
 bio_obs <- bio_obs |> 
   left_join(name_to_accepted_AphiaID, by = c("taxon_valid_name" = "lookup_name")) |> 
-  filter(!is.na(accepted_aphia_id)) |> 
+  #filter(!is.na(accepted_aphia_id)) |> 
   mutate(ps_site_id = str_replace(ps_site_id, "(\\d+)$", ~ str_pad(.x, width = 3, pad = "0"))) |> 
   left_join(stations |> 
               distinct(ps_site_id, region)) |> 
@@ -816,12 +823,12 @@ blt_aphiaIDs_per_region <- biomass_by_taxa_and_station |>
   distinct(region, accepted_aphia_id, accepted_name)
 
 new_bio_obs <- bio_aphiaIDs_per_region |> 
-  anti_join(blt_aphiaIDs_per_region) 
-
-new_bio_obs <- new_bio_obs |> 
+  anti_join(blt_aphiaIDs_per_region) |> 
   left_join(fish_lut |> distinct(accepted_aphia_id, family, rank)) |> 
   filter(rank == "species")
   
+write_csv(new_bio_obs, file.path(exp_path, "data", "primary", "processed", "fish", "additional_taxa_from_bio_surveys.csv"))
+
 new_taxa_summary <- bio_obs |> 
   group_by(region) |> 
   summarize(n_sites = n_distinct(ps_site_id),
@@ -841,7 +848,7 @@ region_summary |>
 For three sites in Manus and 27 sites in the Western Islands, Allison Green conducted 90-minute free-swim surveys between 0 and 30 meters depth, following Gerry Allen’s method, to complement the standard belt transects and enhance the assessment of reef fish diversity. 
 
 These surveys added a total of `r new_taxa_summary$new_taxa[new_taxa_summary$region == "Manus"]` species to Manus and 
-`r new_taxa_summary$new_taxa[new_taxa_summary$region == "Western Islands"]` species to the Western Islands. As a result, the Western Islands recorded the highest total richness (biodiverisy + BLT surveys) with 464 reef fish species, followed by Manus (355 species), Lovongai (326 species), and Murat (275 species). The families contributing the most additional records were Pomacentridae (22 species), Labridae (17 species), and Apogonidae (13 species).
+`r new_taxa_summary$new_taxa[new_taxa_summary$region == "Western Islands"]` species to the Western Islands. As a result, the Western Islands recorded the highest total richness (biodiverisy + BLT surveys) with 464 reef fish species, followed by Manus (354 species), Lovongai (326 species), and Murat (275 species). The families contributing the most additional records were Pomacentridae (22 species), Labridae (17 species), and Apogonidae (13 species).
 
 ::: {.panel-tabset}
 
@@ -1076,7 +1083,6 @@ abun_model_emmeans$emmeans |>
 ```
 
 :::
-
 
 # Biomass
 
@@ -1491,8 +1497,6 @@ for (region_name in all_regions) {
 #| label: fig-biomass-scatter
 #| fig-cap: "Frequency, abundance, and biomass by species"
 
-taxa_summary$trophic_group |> unique()
-
 trophic_palette <- c("herbivore/detritivore"  = "#5C9E5C",
                      "planktivore"      = "#4C9CB2",
                      "lower_carnivore"  = "#E1B07E",
@@ -1700,86 +1704,6 @@ ggplotly(p, tooltip = "text") |>
 ```
 
 :::
-
-
-```{r}
-trophic_colors <- c("herbivore/detritivore" = "#009E73",  # Green for herbivores/detritivores
-                    "lower_carnivore"       = "#E69F00",  # Amber for lower carnivores
-                    "planktivore"           = "#56B4E9",  # Sky blue for planktivores
-                    "shark"                 = "#D55E00",  # Orange/red for sharks
-                    "top_predator"          = "#CC79A7" )  # Pink/purple for top predators
-
-# Create nicer labels for the legend
-  trophic_labels <- c(
-    "herbivore/detritivore" = "Herbivore/Detritivore",
-    "lower_carnivore"       = "Lower Carnivore",
-    "planktivore"           = "Planktivore", 
-    "shark"                 = "Shark",
-    "top_predator"          = "Top Predator"
-  )
-
-# Function to create biomass plot for any region
-
-create_trophic_biomass_plot <- function(region_name) {
-  
-  # Get data for the specified region
-  region_data <- biomass_by_station_and_trophic |> 
-    filter(region == region_name)
-  
-  # Create plot
-  p <- region_data |> 
-    group_by(subregion, trophic_group) |>
-    summarize(biomass_gm2 = mean(biomass_gm2),
-              .groups = "drop") |> 
-    ggplot(aes(x = fct_reorder(subregion,biomass_gm2,sum, .desc = TRUE),
-               y = biomass_gm2, 
-               fill = fct_reorder(trophic_group, biomass_gm2, mean, .desc = FALSE))) +
-    geom_col(position = "fill") +
-    labs(x = "", y = "Average biomass (g/m²)", fill = "",
-         title = paste0("Fish Biomass by Trophic Group and Subregion - ", region_name),
-         subtitle = "Stacked bar plot showing mean biomass contributions by trophic group") +
-    scale_fill_manual(values = trophic_colors, labels = trophic_labels) +
-    theme_minimal(base_size = 13) +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 1))+
-    theme(axis.text.x = element_text(angle = 45, hjust = 1),
-          legend.position = "bottom",
-          legend.box = "horizontal",
-          panel.grid.major.x = element_blank(),
-          plot.title = element_text(face = "bold")) +
-    guides(fill = guide_legend(nrow = 1, byrow = TRUE))
-  
-  return(p)
-
-}
-
-murat_trophic_plot <- create_trophic_biomass_plot(region_name = "Lovongai")
-
-# Get all unique regions in the dataset
-all_regions <- unique(biomass_by_station_and_trophic$region)
-
-# Create a filename-safe version of region names (replacing spaces with underscores)
-safe_region_names <- gsub(" ", "_", all_regions)
-
-# Iterate through all regions and create plots
-for (i in seq_along(all_regions)) {
-  # Get the current region name and its safe version for filenames
-  region_name <- all_regions[i]
-  safe_name <- safe_region_names[i]
-  
-  # Create the plot
-  p <- create_trophic_biomass_plot(region_name)
-  
-  # Generate the file path with safe filename
-  file_path <- file.path(exp_path, paste0("figures/uvs_fish_biomass_by_trophic_by_subregion_", 
-                                         safe_name, ".pdf"))
-  
-  # Save the plot
-  ggsave(file_path, p, width = 10, height = 8)
-  
-  # Optional: print progress message
-  message(paste0("Created plot for region: ", region_name))
-}
-```
 
 ```{r}
 # Define color palette for the specific trophic groups
