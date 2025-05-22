@@ -1,6 +1,8 @@
 ---
 title: "PNG_2024_uvs_lpi_explore"
 format: html
+execute:
+  eval: false
 editor: visual
 editor_options: 
   chunk_output_type: console
@@ -237,7 +239,8 @@ subregion_lengths<-lpi_stations%>%
    dplyr::summarise(length=length(ps_station_id))
 ```
 
-#### Original Functional Group 
+
+#### Original Functional Group
 
 Stacked BarGraph based on original functional groups.
 
@@ -293,7 +296,9 @@ theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
 
 ```
 
+
 #### With Bleaching Functional Group 
+
 
 Stacked Barplot
 
@@ -504,7 +509,9 @@ theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
 
 ## Individual Subregions
 
+
 #### Data Set-up 
+
 
 ##### Original Functional Group
 
@@ -756,7 +763,9 @@ theme(axis.text.y=element_text(size=10, angle = 0),
 
 ```
 
+
 ######  Coral Groups Only
+
 
 ```{r}
 
@@ -901,7 +910,9 @@ theme(axis.text.y=element_text(size=10, angle = 0),
 
 ```
 
+
 ######  Coral Groups Only
+
 
 ```{r}
 
