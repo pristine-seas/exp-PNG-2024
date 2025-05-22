@@ -1,0 +1,1770 @@
+---
+title: "PNG_2024_uvs_lpi_explore"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+# Libraries
+
+```{r}
+
+rm(list = ls())
+#options(repos="https://cran.rstudio.com" )
+library(tidyverse)
+library(stringi)
+library(stringr)
+library(EcolUtils)
+library(data.table)
+library(readxl)
+library(treemapify)
+library(ggVennDiagram)
+
+setwd("~/Documents/PS eDNA/PNG_2024/")
+```
+
+# Site Data
+
+```{r}
+
+sites<-readRDS("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/sites.rds")
+
+sites_uvs<-sites$uvs
+total_sites_region<-sites_uvs %>%
+  group_by(region) %>%
+   dplyr::summarise(surveys = length(ps_site_id))
+
+stations<-readRDS("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/stations.rds")
+
+stations_uvs<-stations$lpi
+
+```
+
+# Benthic cover
+
+Setting up the data to include an additional functional group column that includes the bleaching and dead coral categories that were taken in Lovongai, Manus, and the Western Islands. Also creating a site length file to calculate covers at the site level as not all sites had two transects for pooled site cover graphs
+
+```{r}
+
+load("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/lpi/lpi_staging.RData")
+
+
+# The functional_group only has the broad Hard Coral Category. Creating a functional_group2 column that converts the bleached and dead into their own functional categories
+
+cover_by_station_and_taxa$functional_group2<-cover_by_station_and_taxa$functional_group
+
+cover_by_station_and_taxa$functional_group2<-ifelse(cover_by_station_and_taxa$morphotaxon == "Hard coral - bleached", "hard coral - bleached", cover_by_station_and_taxa$functional_group2)
+
+
+cover_by_station_and_taxa$functional_group2<-ifelse(cover_by_station_and_taxa$morphotaxon == "Hard coral - dead", "hard coral - dead", cover_by_station_and_taxa$functional_group2)
+
+cover_by_station_and_taxa$functional_group2<-ifelse(cover_by_station_and_taxa$morphotaxon == "Hard coral", "hard coral - live", cover_by_station_and_taxa$functional_group2)
+
+cover_by_station_and_taxa$functional_group2<-ifelse(cover_by_station_and_taxa$functional_group2 == "hard coral", "hard coral - live", cover_by_station_and_taxa$functional_group2)
+
+# Getting number of sites as some sites had one transect while others had two. Need this for region and subregion average covers
+site_lengths<-lpi_stations%>%
+   group_by(ps_site_id)  %>%
+   dplyr::summarise(length=length(ps_station_id))
+
+
+```
+
+## Region Cover
+
+Creating region lengths to summarize percent cover at region level which is applied to all region graphs.
+
+```{r}
+
+# Length of stations to get region percents
+region_lengths<-lpi_stations%>%
+   group_by(region)  %>%
+   dplyr::summarise(length=length(ps_station_id))
+```
+
+#### Original Functional Group
+
+Stacked BarGraph based on original functional groups.
+
+```{r}
+
+benthic_region<-cover_by_station_and_taxa %>%   left_join(lpi_stations[,c("region", "ps_station_id","depth_strata")],.,by = "ps_station_id") %>%
+  group_by(region,functional_group) %>%
+    dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+  left_join(region_lengths,., by = "region") %>%
+  mutate(cover = sum/length) 
+ 
+ benthic_region$region2<-factor(benthic_region$region, levels = c('Murat', 'Lovongai','Manus', 'Western Islands'))
+ 
+ benthic_region$functional_group <- factor(benthic_region$functional_group, levels=c('sediment/rubble/barren',"other","sponges",'cyanobacteria', 'turf','erect algae','encrusting algae',"soft coral", 'cca', 'hard coral'))
+
+ 
+ ## Percent Cover
+ggplot(benthic_region, aes(region2, cover, fill = functional_group))+
+  geom_bar(stat = "identity", color = "black") +
+ scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 101))+
+  xlab("")+
+  ylab("% Benthic Cover")+
+  #facet_wrap(~ region, scales = "free")+
+  theme_bw()+
+theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 12, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "right")
+ 
+ 
+```
+
+#### Cover Groups Only
+
+Only coral functional groups (live, dead, bleached) in stacked barplot which is applied to all subregion graphs.
+
+```{r}
+
+bleach_region<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c("region", "ps_station_id","depth_strata")],.,by = "ps_station_id") %>%
+  group_by(region,  functional_group2) %>%
+    dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+  left_join(region_lengths,., by = "region") %>%
+  mutate(cover = sum/length)%>%
+   filter(region != "Murat") %>%
+  filter(functional_group2 %in% c("hard coral - dead","hard coral - bleached", 'hard coral - live'))
+
+
+
+ ## Percent Cover
+ggplot(bleach_region, aes(region, cover, fill = functional_group2))+
+  geom_bar(stat = "identity", color = "black", width = 0.75) +
+scale_fill_manual(name = "", values =c(  "hard coral - live" = "yellow", "hard coral - dead" = "black","hard coral - bleached" = "gray80" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 101))+
+  coord_flip() +
+  xlab("")+
+  ylab("% Benthic Cover")+
+theme_bw()+
+theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+ 
+```
+
+#### Only Bleaching based on percent of hard coral bleached
+
+```{r}
+
+# Bleaching
+
+bleach_region_percent<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c("region", "ps_station_id","depth_strata")],.,by = "ps_station_id") %>%
+  group_by(region,functional_group) %>%
+  dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+     filter(region != "Murat") %>%
+  left_join(region_lengths,., by = "region") %>%
+  mutate(overall_cover = sum/length)%>%
+  filter(functional_group %in% c("hard coral"))%>%
+  left_join(bleach_region[,c("region","functional_group2","cover")], by = "region")%>%
+  filter(functional_group2 == "hard coral - bleached") %>%
+    mutate(prevalence = round((cover/overall_cover)*100,2))
+
+
+## Percent Cover
+ggplot(bleach_region_percent, aes(region, prevalence, fill = functional_group2))+
+  geom_bar(stat = "identity", color = "black", width = 0.75) +
+ scale_fill_manual(name = "", values =c(  "hard coral - live" = "yellow", "hard coral - dead" = "black","hard coral - bleached" = "gray80" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 75))+
+  coord_flip() +
+  xlab("")+
+    ylab("Percentage of coral that is bleached")+
+  theme_bw()+
+theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+```
+
+#### Functional Group Metrics and summaries
+
+```{r}
+
+# Richness overall by functional group
+all_categories<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c( "ps_station_id")],.,by = "ps_station_id") %>%
+  distinct(functional_group, accepted_name) %>% 
+  mutate(rep = 1) %>%
+  group_by(functional_group)%>%
+  dplyr::summarise(richness = sum(rep)) 
+
+# All algae
+all_algae<- all_categories%>%
+   filter(functional_group %in% c("cca","encrusting algae","erect algae","turf")) %>%
+ dplyr::summarise(richness = sum(richness))
+
+# By Region
+benthic_region_categories<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c("region", "ps_station_id")],.,by = "ps_station_id") %>%
+  distinct(region, functional_group, accepted_name) %>% 
+  mutate(rep = 1) %>%
+  group_by(region, functional_group)%>%
+  dplyr::summarise(richness = sum(rep)) %>%
+  pivot_wider(id_cols = region, names_from = functional_group, values_from = richness)
+
+
+```
+
+## Subregion Cover
+
+Creating subregion lengths to summarize percent cover at subregion level which is applied to all subregion graphs.
+
+```{r}
+# Add the length of stations to get subregion percents
+subregion_lengths<-lpi_stations%>%
+   group_by(subregion)  %>%
+   dplyr::summarise(length=length(ps_station_id))
+```
+
+#### Original Functional Group 
+
+Stacked BarGraph based on original functional groups.
+
+```{r}
+
+benthic_subregion<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c("region", "subregion","ps_station_id","depth_strata")],.,by = "ps_station_id") %>%
+  group_by(region,subregion, functional_group) %>%
+    dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+  left_join(subregion_lengths,., by = "subregion") %>%
+  mutate(cover = sum/length) %>%
+  mutate(hig_sd = max-cover, low_sd = min-cover)
+
+covercheck<-benthic_subregion%>%
+   group_by(subregion)  %>%
+    dplyr::summarise(percent = sum(cover))
+
+
+benthic_subregion$subregion2<- factor(benthic_subregion$subregion, levels = c('Mussau', 'Emirau','Tench', 'Tingwon', 'Au', "Neitab", "Enelava", "Dunung", "Nemto", "Kung","Tsolik","Bipi","Harengan","Manus","Aua","Wuvulu","Ninigo","Luf"  ))
+
+benthic_subregion$functional_group <- factor(benthic_subregion$functional_group, levels=c('sediment/rubble/barren',"other","sponges",'cyanobacteria', 'turf','erect algae','encrusting algae',"soft coral", 'cca', 'hard coral'))
+
+
+
+## Percent Cover
+ggplot(benthic_subregion, aes(subregion2, cover, fill = functional_group))+
+  geom_bar(stat = "identity", color = "black") +
+ scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 110))+
+  xlab("")+
+  ylab("% Benthic Cover")+
+   geom_vline(xintercept = c(3.5, 11.5, 14.5), linetype ="longdash", size= 1, color = "black")+
+ # geom_text(aes(label = c("Murat","Lovonhai","Mannus","Western Islands"),  hjust = 1))+
+   annotate("text", x=2, y=105, label="Murat", angle=0, size=6, color="black") +
+     annotate("text", x=7.5, y=105, label="Lovongai", angle=0, size=6, color="black") +
+    annotate("text", x=13, y=105, label="Manus", angle=0, size=6, color="black") +
+     annotate("text", x=16.5, y=105, label="Western Islands", angle=0, size=6, color="black") +
+ #facet_wrap(~ region, scales = "free")+
+  theme_bw()+
+theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+
+
+
+
+
+```
+
+#### With Bleaching Functional Group 
+
+Stacked Barplot
+
+```{r}
+
+benthic_subregion_bleach<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c("region", "subregion","ps_station_id","depth_strata")],.,by = "ps_station_id") %>%
+  group_by(region,subregion, functional_group2) %>%
+    dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+  left_join(subregion_lengths,., by = "subregion") %>%
+  mutate(cover = sum/length) %>%
+  mutate(hig_sd = max-cover, low_sd = min-cover)
+
+covercheck<-benthic_subregion_bleach%>%
+   group_by(subregion)  %>%
+    dplyr::summarise(percent = sum(cover))
+
+
+benthic_subregion_bleach$subregion2<- factor(benthic_subregion_bleach$subregion, levels = c('Mussau', 'Emirau','Tench', 'Tingwon', 'Au', "Neitab", "Enelava", "Dunung", "Nemto", "Kung","Tsolik","Bipi","Harengan","Manus","Aua","Wuvulu","Ninigo","Luf"  ))
+
+benthic_subregion_bleach$functional_group3 <- factor(benthic_subregion_bleach$functional_group2, levels=c('sediment/rubble/barren',"other","sponges",'cyanobacteria', 'turf','erect algae','encrusting algae',"soft coral", 'cca', 'hard coral - dead', "hard coral - bleached", "hard coral - live"))
+
+
+
+## Percent Cover
+ggplot(benthic_subregion_bleach, aes(subregion2, cover, fill = functional_group3))+
+  geom_bar(stat = "identity", color = "black") +
+ scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral - live" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue", "hard coral - bleached" = "white", "hard coral - dead" = "black" ) )  +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 110))+
+  xlab("Subregion")+
+  ylab("% Benthic Cover")+
+   geom_vline(xintercept = c(3.5, 11.5, 14.5), linetype ="longdash", size= 1, color = "black")+
+ # geom_text(aes(label = c("Murat","Lovonhai","Mannus","Western Islands"),  hjust = 1))+
+   annotate("text", x=2, y=105, label="Murat", angle=0, size=6, color="black") +
+     annotate("text", x=7.5, y=105, label="Lovongai", angle=0, size=6, color="black") +
+    annotate("text", x=13, y=105, label="Manus", angle=0, size=6, color="black") +
+     annotate("text", x=16.5, y=105, label="Western Islands", angle=0, size=6, color="black") +
+ #facet_wrap(~ region, scales = "free")+
+  theme_bw()+
+theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
+      axis.title.x = element_text(size = 16),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+
+allsub<-benthic_subregion_bleach%>%
+  pivot_wider(id_cols = c(region,subregion), names_from = functional_group2, values_from = cover)
+
+lov_sub<-benthic_subregion_bleach %>%
+  filter(region == "Lovongai") %>%
+  pivot_wider(id_cols = subregion, names_from = functional_group2, values_from = cover)
+
+manu_sub<-benthic_subregion_bleach %>%
+  filter(region == "Manus") %>%
+  pivot_wider(names_from = functional_group2, values_from = cover, id_cols = subregion)
+  
+```
+
+#### Coral Groups Only
+
+Stack barplot - coordinates pivoted
+
+With Murat
+
+```{r}
+
+# Bleaching with Murat
+
+bleach_subregion<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c("region", "subregion","ps_station_id","depth_strata")],.,by = "ps_station_id") %>%
+  group_by(region,subregion, functional_group2) %>%
+    dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+  left_join(subregion_lengths,., by = "subregion") %>%
+  mutate(cover = sum/length)%>%
+ #  filter(region != "Murat") %>%
+  filter(functional_group2 %in% c("hard coral - dead","hard coral - bleached", 'hard coral - live'))
+
+
+bleach_subregion$subregion2<- factor(bleach_subregion$subregion, levels = c('Mussau','Emirau','Tench',   'Tingwon', 'Au', "Neitab", "Enelava", "Dunung", "Nemto", "Kung","Tsolik","Bipi","Harengan","Manus","Aua","Wuvulu","Ninigo","Luf"  ))
+
+bleach_subregion$functional_group2 <- factor(bleach_subregion$functional_group2, levels=c("hard coral - dead","hard coral - bleached", 'hard coral - live'))
+
+
+## Percent Cover
+ggplot(bleach_subregion, aes(subregion2, cover, fill = functional_group2))+
+  geom_bar(stat = "identity", color = "black", width = 0.75) +
+ scale_fill_manual(name = "", values =c(  "hard coral - live" = "yellow", "hard coral - dead" = "black","hard coral - bleached" = "gray80" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 101))+
+  coord_flip() +
+  xlab("")+
+  ylab("% Benthic Cover")+
+ geom_vline(xintercept = c(3.5, 11.5, 14.5), linetype ="longdash", size= .5, color = "black")+
+#geom_hline(yintercept = 30,  size = .25, color = "gray40")+
+   annotate("text", x=2, y=80, label="Murat", angle=0, size=6, color="black") +
+ annotate("text", x=8, y=80, label="Lovongai", angle=0, size=6, color="black") +
+   annotate("text", x=13, y=80, label="Manus", angle=0, size=6, color="black") +
+   annotate("text", x=16.5, y=80, label="Western Islands", angle=0, size=6, color="black") +
+ #facet_wrap(~ region, scales = "free")+
+  theme_bw()+
+theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+```
+
+Without Murat
+
+```{r}
+
+# Bleaching with Murat
+
+bleach_subregion_no_murat<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c("region", "subregion","ps_station_id","depth_strata")],.,by = "ps_station_id") %>%
+  group_by(region,subregion, functional_group2) %>%
+    dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+  left_join(subregion_lengths,., by = "subregion") %>%
+  mutate(cover = sum/length)%>%
+  filter(region != "Murat") %>%
+  filter(functional_group2 %in% c("hard coral - dead","hard coral - bleached", 'hard coral - live'))
+
+
+bleach_subregion_no_murat$subregion2<- factor(bleach_subregion_no_murat$subregion, levels = c( 'Tingwon', 'Au', "Neitab", "Enelava", "Dunung", "Nemto", "Kung","Tsolik","Bipi","Harengan","Manus","Aua","Wuvulu","Ninigo","Luf"  ))
+
+bleach_subregion_no_murat$functional_group2 <- factor(bleach_subregion_no_murat$functional_group2, levels=c("hard coral - dead","hard coral - bleached", 'hard coral - live'))
+
+
+## Percent Cover
+ggplot(bleach_subregion_no_murat, aes(subregion2, cover, fill = functional_group2))+
+  geom_bar(stat = "identity", color = "black", width = 0.75) +
+ scale_fill_manual(name = "", values =c(  "hard coral - live" = "yellow", "hard coral - dead" = "black","hard coral - bleached" = "gray80" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 101))+
+  coord_flip() +
+  xlab("")+
+  ylab("% Benthic Cover")+
+ geom_vline(xintercept = c(8.5, 11.5), linetype ="longdash", size= .5, color = "black")+
+ annotate("text", x=5, y=80, label="Lovongai", angle=0, size=6, color="black") +
+   annotate("text", x=10, y=80, label="Manus", angle=0, size=6, color="black") +
+   annotate("text", x=14, y=80, label="Western Islands", angle=0, size=6, color="black") +
+ #facet_wrap(~ region, scales = "free")+
+  theme_bw()+
+theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+```
+
+#### Only Bleaching based on percent of hard coral bleached
+
+```{r}
+
+
+bleach_subregion_percent<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c("region", "subregion","ps_station_id","depth_strata")],.,by = "ps_station_id") %>%
+  group_by(region,subregion, functional_group) %>%
+  dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+     filter(region != "Murat") %>%
+  left_join(subregion_lengths,., by = "subregion") %>%
+  mutate(overall_cover = sum/length)%>%
+  filter(functional_group %in% c("hard coral"))%>%
+  left_join(bleach_subregion[,c("subregion","functional_group2","cover")], by = "subregion")%>%
+  filter(functional_group2 == "hard coral - bleached") %>%
+    mutate(prevalence = round((cover/overall_cover)*100,2))
+
+
+bleach_subregion_percent$subregion2<- factor(bleach_subregion_percent$subregion, levels = c('Tingwon', 'Au', "Neitab", "Enelava", "Dunung", "Nemto", "Kung","Tsolik","Bipi","Harengan","Manus","Aua","Wuvulu","Ninigo","Luf"  ))
+
+
+## Percent Cover
+ggplot(bleach_subregion_percent, aes(subregion2, prevalence, fill = functional_group2))+
+  geom_bar(stat = "identity", color = "black", width = 0.75) +
+ scale_fill_manual(name = "", values =c(  "hard coral - live" = "yellow", "hard coral - dead" = "black","hard coral - bleached" = "gray80" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 101))+
+  coord_flip() +
+  xlab("")+
+    ylab("Percentage of coral that is bleached")+
+ geom_vline(xintercept = c(8.5, 11.5), linetype ="longdash", size= .5, color = "black")+
+#geom_hline(yintercept = 30,  size = .25, color = "gray40")+
+ annotate("text", x=5, y=80, label="Lovongai", angle=0, size=6, color="black") +
+   annotate("text", x=10, y=80, label="Manus", angle=0, size=6, color="black") +
+   annotate("text", x=13.5, y=80, label="Western Islands", angle=0, size=6, color="black") +
+ #facet_wrap(~ region, scales = "free")+
+  theme_bw()+
+theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+```
+
+## Individual Subregions
+
+#### Data Set-up 
+
+##### Original Functional Group
+
+```{r}
+
+
+benthic_sites<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c("region", "subregion","locality", "ps_site_id","ps_station_id")],.,by = "ps_station_id") %>%
+  group_by(region,subregion, locality, ps_site_id, functional_group) %>%
+    dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+  left_join(site_lengths,., by = "ps_site_id") %>%
+  mutate(cover = sum/length)
+
+benthic_sites%>%
+   group_by(ps_site_id)  %>%
+    dplyr::summarise(percent = sum(cover))
+
+
+benthic_sites$subregion2<- factor(benthic_sites$subregion, levels = c('Mussau', 'Emirau','Tench', 'Tingwon', 'Au', "Neitab", "Enelava", "Dunung", "Nemto", "Kung","Tsolik","Bipi","Harengan","Manus","Aua","Wuvulu","Ninigo","Luf"  ))
+
+benthic_sites$functional_group <- factor(benthic_sites$functional_group, levels=c('sediment/rubble/barren',"other","sponges",'cyanobacteria', 'turf','erect algae','encrusting algae',"soft coral", 'cca', 'hard coral'))
+
+
+
+```
+
+##### With Bleaching Functional Groups
+
+```{r}
+
+bleach_site_all<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c("region", "subregion","ps_site_id","ps_station_id")],.,by = "ps_station_id") %>%
+  group_by(region,subregion,ps_site_id, functional_group2) %>%
+    dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+  left_join(site_lengths,., by = "ps_site_id") %>%
+  mutate(cover = sum/length)%>%
+   filter(region != "Murat")
+
+bleach_site_all$subregion2<- factor(bleach_site_all$subregion, levels = c('Tingwon', 'Au', "Neitab", "Enelava", "Dunung", "Nemto", "Kung","Tsolik","Bipi","Harengan","Manus","Aua","Wuvulu","Ninigo","Luf"  ))
+
+
+ bleach_site_all$functional_group2 <- factor(bleach_site_all$functional_group2, levels=c('sediment/rubble/barren',"other","sponges",'cyanobacteria', 'turf','erect algae','encrusting algae',"soft coral", 'cca', "hard coral - dead", 'hard coral - bleached', 'hard coral - live'))
+ 
+ # adding column of just site number for easier graphing
+ bleach_site_all<-bleach_site_all %>% 
+   mutate(site_n = gsub('.*?[-_]', '', ps_site_id))
+ 
+
+```
+
+##### Coral Groups Only
+
+```{r}
+
+bleach_site<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c("region", "subregion","ps_site_id","ps_station_id")],.,by = "ps_station_id") %>%
+  group_by(region,subregion,ps_site_id, functional_group2) %>%
+    dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+  left_join(site_lengths,., by = "ps_site_id") %>%
+  mutate(cover = sum/length)%>%
+   filter(region != "Murat") %>%
+  filter(functional_group2 %in% c("hard coral - dead","hard coral - bleached", 'hard coral - live'))
+
+bleach_site$subregion2<- factor(bleach_site$subregion, levels = c('Tingwon', 'Au', "Neitab", "Enelava", "Dunung", "Nemto", "Kung","Tsolik","Bipi","Harengan","Manus","Aua","Wuvulu","Ninigo","Luf"  ))
+
+bleach_site$functional_group2 <- factor(bleach_site$functional_group2, levels=c("hard coral - dead","hard coral - bleached", 'hard coral - live'))
+
+```
+
+##### MorphoTaxa for Metrics
+
+```{r}
+##### Morphotaxa
+benthic_sites_taxa<-cover_by_station_and_taxa %>%
+ left_join(lpi_morphotaxa[,c("morphotaxon", "family","genus")],.,by = "morphotaxon") %>%
+  left_join(lpi_stations[,c("region", "subregion","locality", "ps_site_id","ps_station_id")],.,by = "ps_station_id") %>%
+  group_by(region,subregion, locality, ps_site_id, functional_group,morphotaxon, genus) %>%
+    dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+  left_join(site_lengths,., by = "ps_site_id") %>%
+  mutate(cover = sum/length) %>%
+  distinct()
+
+
+```
+
+#### Murat
+
+###### Original Functional Group
+
+```{r}
+
+#subregion breakdowns
+sub_murat<-benthic_subregion %>%
+  filter(region == "Murat") %>%
+  filter(functional_group == "cca")
+
+
+benthic_sites_murat <- benthic_sites %>%
+  filter(region == "Murat")
+
+
+
+################## 
+##################
+
+ggplot(benthic_sites_murat, aes(ps_site_id, cover, fill = functional_group))+
+  geom_bar(stat = "identity", color = "black") +
+ scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 110))+
+  xlab("")+
+  ylab("% Benthic Cover")+
+   geom_vline(xintercept = c(13.5, 19.5), linetype ="longdash", size= 1, color = "black") +
+  annotate("text", x=7, y=105, label="Mussau", angle=0, size=6, color="black") +
+    annotate("text", x=16.5, y=105, label="Emirau", angle=0, size=6, color="black") +
+    annotate("text", x=21, y=105, label="Tench", angle=0, size=6, color="black") +
+
+  theme_bw()+
+theme(axis.text.y=element_text(size=10, angle = 0),
+      axis.text.x=element_text(size=0, angle = 0),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+
+```
+
+###### Metrics
+
+```{r}
+benthic_sites_murat_means<-benthic_sites_murat %>%
+  group_by(subregion, functional_group) %>%
+  dplyr::summarise(mean = mean(cover))
+
+
+benthic_sites_taxa_murat<-benthic_sites_taxa %>%
+  filter(region == "Murat")
+
+murat_Algae<-benthic_sites_taxa_murat %>%
+  filter(functional_group == "erect algae"| functional_group == "turf") %>%
+  group_by(subregion, genus) %>%
+  dplyr::summarise(mean = mean(cover))
+
+murat_soft_corals<-benthic_sites_taxa_murat %>%
+  filter(functional_group == "soft coral") %>%
+  group_by(subregion, genus) %>%
+  dplyr::summarise(mean = mean(cover))
+```
+
+#### Lovongai
+
+###### Original Functional Group
+
+```{r}
+
+
+
+benthic_sites_Lovongai <- benthic_sites %>%
+  filter(region == "Lovongai")  %>% 
+  mutate(ps_site_id = fct_reorder(ps_site_id, subregion)) 
+
+
+benthic_sites_Lovongai$ps_site_id2<- factor(benthic_sites_Lovongai$ps_site_id, levels = c('PNG_2024_uvs_023', 'PNG_2024_uvs_024', "PNG_2024_uvs_025", "PNG_2024_uvs_026", "PNG_2024_uvs_027",
+     "PNG_2024_uvs_034", "PNG_2024_uvs_035",
+    "PNG_2024_uvs_031","PNG_2024_uvs_032",
+    "PNG_2024_uvs_041",  "PNG_2024_uvs_042", 
+    "PNG_2024_uvs_028", "PNG_2024_uvs_029","PNG_2024_uvs_030",
+   "PNG_2024_uvs_038","PNG_2024_uvs_039", 
+   "PNG_2024_uvs_033",
+     "PNG_2024_uvs_036" ,"PNG_2024_uvs_037","PNG_2024_uvs_040"))
+
+
+## Percent Cover
+ggplot(benthic_sites_Lovongai, aes(ps_site_id2, cover, fill = functional_group))+
+  geom_bar(stat = "identity", color = "black", width = 0.9) +
+ scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 106))+
+  xlab("")+
+  ylab("% Benthic Cover")+
+  geom_vline(xintercept = c(5.5, 7.5, 9.5,11.5,14.5,16.5,17.5), linetype ="longdash", size= 1, color = "black") +
+  annotate("text", x=3, y=103, label="Tingwon", angle=0, size=4, color="black") +
+annotate("text", x=6.5, y=103, label="Au", angle=0, size=4, color="black") +
+ annotate("text", x=8.5, y=103, label="Neitab", angle=0, size=4, color="black") +
+    annotate("text", x=10.5, y=103, label="Enelava", angle=0, size=4, color="black") +
+annotate("text", x=13, y=103, label="Dunung", angle=0, size=4, color="black") +
+ annotate("text", x=15.5, y=103, label="Nemto", angle=0, size=4, color="black")+
+annotate("text", x=17, y=103, label="Kung", angle=0, size=4, color="black") +
+ annotate("text", x=19, y=103, label="Tsolik", angle=0, size=4, color="black")+
+
+  theme_bw()+
+theme(axis.text.y=element_text(size=10, angle = 0),
+      axis.text.x=element_text(size=0, angle = 0),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+```
+
+###### With Bleaching Functional Groups
+
+```{r}
+bleach_site_all_Lovongai <- bleach_site_all %>%
+  filter(region == "Lovongai")
+
+bleach_site_all_Lovongai$site_n2<- factor(bleach_site_all_Lovongai$site_n, levels = c('023', '024', "025", "026", "027",
+     "034", "035",
+    "031","032",
+    "041",  "042", 
+    "028", "029","030",
+   "038","039", 
+   "033",
+     "036" ,"037","040"))
+
+## Percent Cover
+ggplot(bleach_site_all_Lovongai, aes(site_n2, cover, fill = functional_group2))+
+  geom_bar(stat = "identity", color = "black", width = 0.9) +
+ scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral - live" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue", "hard coral - bleached" = "white", "hard coral - dead" = "black" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 106))+
+  ylab("\n% Benthic Cover")+
+  xlab("Site #")+
+  geom_vline(xintercept = c(5.5, 7.5, 9.5,11.5,14.5,16.5,17.5), linetype ="longdash", size= 1, color = "black") +
+  annotate("text", x=3, y=103, label="Tingwon", angle=0, size=4, color="black") +
+annotate("text", x=6.5, y=103, label="Au", angle=0, size=4, color="black") +
+ annotate("text", x=8.5, y=103, label="Neitab", angle=0, size=4, color="black") +
+    annotate("text", x=10.5, y=103, label="Enelava", angle=0, size=4, color="black") +
+annotate("text", x=13, y=103, label="Dunung", angle=0, size=4, color="black") +
+ annotate("text", x=15.5, y=103, label="Nemto", angle=0, size=4, color="black")+
+annotate("text", x=17, y=103, label="Kung", angle=0, size=4, color="black") +
+ annotate("text", x=19, y=103, label="Tsolik", angle=0, size=4, color="black")+
+  theme_bw()+
+theme(axis.text.y=element_text(size=10, angle = 0),
+    #  axis.text.x=element_text(size=0, angle = 0),
+    axis.title.x = element_text(vjust = -0.5),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+
+```
+
+######  Coral Groups Only
+
+```{r}
+
+#############################
+
+bleach_site_Lovongai <- bleach_site %>%
+  filter(region == "Lovongai")
+
+bleach_site_Lovongai$ps_site_id2<- factor(bleach_site_Lovongai$ps_site_id, levels = c('PNG_2024_uvs_023', 'PNG_2024_uvs_024', "PNG_2024_uvs_025", "PNG_2024_uvs_026", "PNG_2024_uvs_027",
+     "PNG_2024_uvs_034", "PNG_2024_uvs_035",
+    "PNG_2024_uvs_031","PNG_2024_uvs_032",
+    "PNG_2024_uvs_041",  "PNG_2024_uvs_042", 
+    "PNG_2024_uvs_028", "PNG_2024_uvs_029","PNG_2024_uvs_030",
+   "PNG_2024_uvs_038","PNG_2024_uvs_039", 
+   "PNG_2024_uvs_033",
+     "PNG_2024_uvs_036" ,"PNG_2024_uvs_037","PNG_2024_uvs_040"))
+
+ggplot(bleach_site_Lovongai, aes(ps_site_id2, cover, fill = functional_group2))+
+  geom_bar(stat = "identity", color = "black", width = 1) +
+ scale_fill_manual(name = "", values =c(  "hard coral - live" = "yellow", "hard coral - dead" = "black","hard coral - bleached" = "gray80" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 80))+
+  coord_flip() +
+  xlab("")+
+  ylab("% Benthic Cover")+
+  geom_vline(xintercept = c(5.5, 7.5, 9.5,11.5,14.5,16.5,17.5), linetype ="longdash", size= .5, color = "black") +
+  annotate("text", x=3, y=70, label="Tingwon", angle=0, size=4, color="black") +
+annotate("text", x=6.5, y=70, label="Au", angle=0, size=4, color="black") +
+ annotate("text", x=8.5, y=70, label="Neitab", angle=0, size=4, color="black") +
+    annotate("text", x=10.5, y=70, label="Enelava", angle=0, size=4, color="black") +
+annotate("text", x=13, y=70, label="Dunung", angle=0, size=4, color="black") +
+ annotate("text", x=15.5, y=70, label="Nemto", angle=0, size=4, color="black")+
+annotate("text", x=17, y=70, label="Kung", angle=0, size=4, color="black") +
+ annotate("text", x=19, y=70, label="Tsolik", angle=0, size=4, color="black")+
+  theme_bw()+
+theme(axis.text.y = element_text(size=0, angle = 0),
+      axis.text.x= element_text(size=14, angle = 0),
+            axis.ticks.y=element_blank(), 
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+
+
+```
+
+###### Metrics
+
+```{r}
+
+metri_lov<-bleach_site_all_Lovongai %>%
+  filter(functional_group2 %in% c("hard coral - live", "hard coral - bleached","hard coral dead","cyanobacteria")) %>%
+  pivot_wider(id_cols = c(ps_site_id, subregion),names_from = functional_group2, values_from = cover)
+
+
+metri_lov_all<-bleach_site_all_Lovongai %>%
+    pivot_wider(id_cols = c(ps_site_id, subregion),names_from = functional_group2, values_from = cover)
+
+
+# What are the dominant groups per site
+dom_lov<-
+  slice_max( bleach_site_all_Lovongai, order_by = cover, by=ps_site_id)
+
+
+
+```
+
+#### Manus
+
+###### Original Functional Group
+
+```{r}
+
+
+benthic_sites_manus <- benthic_sites %>%
+  filter(region == "Manus")
+
+manu_div<-benthic_sites_manus %>%
+  group_by(subregion2,ps_site_id) %>%
+  dplyr::summarize(leng<-length(ps_site_id))%>%
+  group_by(subregion2)%>%
+  dplyr::summarise(leng<-length(ps_site_id))
+
+## Percent Cover
+ggplot(benthic_sites_manus, aes(ps_site_id, cover, fill = functional_group))+
+  geom_bar(stat = "identity", color = "black") +
+ scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 110))+
+  xlab("")+
+  ylab("% Benthic Cover")+
+   geom_vline(xintercept = c(7.5, 9.5), linetype ="longdash", size= 1, color = "black") +
+  annotate("text", x=4, y=105, label="Bipi", angle=0, size=6, color="black") +
+    annotate("text", x=8.5, y=105, label="Manus", angle=0, size=6, color="black") +
+    annotate("text", x=14, y=105, label="Harengan", angle=0, size=6, color="black") +
+
+  theme_bw()+
+theme(axis.text.y=element_text(size=10, angle = 0),
+      axis.text.x=element_text(size=0, angle = 0),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+```
+
+###### With Bleaching Functional Groups
+
+```{r}
+bleach_site_all_Manus <- bleach_site_all %>%
+  filter(region == "Manus")
+
+
+## Percent Cover
+ggplot(bleach_site_all_Manus, aes(site_n, cover, fill = functional_group2))+
+  geom_bar(stat = "identity", color = "black", width = 0.9) +
+ scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral - live" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue", "hard coral - bleached" = "white", "hard coral - dead" = "black" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 110))+
+  ylab("\n% Benthic Cover")+
+  xlab("Site #")+
+   geom_vline(xintercept = c(7.5, 9.5), linetype ="longdash", size= 1, color = "black") +
+  annotate("text", x=4, y=105, label="Bipi", angle=0, size=6, color="black") +
+    annotate("text", x=8.5, y=105, label="Manus", angle=0, size=6, color="black") +
+    annotate("text", x=14, y=105, label="Harengan", angle=0, size=6, color="black") +
+
+  theme_bw()+
+theme(axis.text.y=element_text(size=10, angle = 0),
+    axis.title.x = element_text(vjust = -0.5),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+
+```
+
+######  Coral Groups Only
+
+```{r}
+
+
+#############################
+
+bleach_site_manus <- bleach_site %>%
+  filter(region == "Manus")
+
+ggplot(bleach_site_manus, aes(ps_site_id, cover, fill = functional_group2))+
+  geom_bar(stat = "identity", color = "black", width = 1) +
+ scale_fill_manual(name = "", values =c(  "hard coral - live" = "yellow", "hard coral - dead" = "black","hard coral - bleached" = "gray80" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 80))+
+  coord_flip() +
+  xlab("")+
+  ylab("% Benthic Cover")+
+   geom_vline(xintercept = c(7.5, 9.5), linetype ="longdash", size= .5, color = "black") +
+  annotate("text", x=4, y=70, label="Bipi", angle=0, size=6, color="black") +
+    annotate("text", x=8.5, y=70, label="Manus", angle=0, size=6, color="black") +
+    annotate("text", x=14, y=70, label="Harengan", angle=0, size=6, color="black") +
+  theme_bw()+
+theme(axis.text.y = element_text(size=0, angle = 0),
+      axis.text.x= element_text(size=14,angle = 0),
+            axis.ticks.y=element_blank(), 
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+
+
+```
+
+###### Metrics
+
+```{r}
+
+metri_manus<-bleach_site_all_Manus %>%
+  filter(functional_group2 %in% c("hard coral - live", "hard coral - bleached","hard coral dead","cyanobacteria")) %>%
+  pivot_wider(id_cols = c(ps_site_id, subregion),names_from = functional_group2, values_from = cover)
+
+
+metri_manus_all<-bleach_site_all_Manus %>%
+    pivot_wider(id_cols = c(ps_site_id, subregion),names_from = functional_group2, values_from = cover)
+
+
+# What are the dominant groups per site
+dom_manus<-
+  slice_max( bleach_site_all_Manus, order_by = cover, by=ps_site_id)
+
+
+```
+
+#### Western Islands
+
+###### Original Functional Group
+
+```{r}
+
+benthic_sites_west <- benthic_sites %>%
+  filter(region == "Western Islands")
+
+west_div<-benthic_sites_west %>%
+  group_by(subregion2,ps_site_id) %>%
+  dplyr::summarize(leng<-length(ps_site_id))%>%
+  group_by(subregion2)%>%
+  dplyr::summarise(leng<-length(ps_site_id))
+
+## Percent Cover
+ggplot(benthic_sites_west, aes(ps_site_id, cover, fill = functional_group))+
+  geom_bar(stat = "identity", color = "black") +
+ scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 110))+
+  xlab("")+
+  ylab("% Benthic Cover")+
+   geom_vline(xintercept = c(7.5, 21.5,24.5), linetype ="longdash", size= 1, color = "black") +
+  annotate("text", x=4, y=105, label="Luf", angle=0, size=6, color="black") +
+    annotate("text", x=14, y=105, label="Ninigo", angle=0, size=6, color="black") +
+    annotate("text", x=23, y=105, label="Aua", angle=0, size=6, color="black") +
+      annotate("text", x=27, y=105, label="Wuvulu", angle=0, size=6, color="black") +
+
+  theme_bw()+
+theme(axis.text.y=element_text(size=10, angle = 0),
+      axis.text.x=element_text(size=0, angle = 0),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+
+```
+
+###### With Bleaching Functional Groups
+
+```{r}
+
+
+bleach_site_all_west <- bleach_site_all %>%
+  filter(region == "Western Islands")
+
+## Percent Cover
+ggplot(bleach_site_all_west, aes(site_n, cover, fill = functional_group2))+
+  geom_bar(stat = "identity", color = "black", width = 0.9) +
+ scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral - live" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue", "hard coral - bleached" = "white", "hard coral - dead" = "black" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 110))+
+  ylab("\n% Benthic Cover")+
+  xlab("Site #")+
+   geom_vline(xintercept = c(7.5, 21.5,24.5), linetype ="longdash", size= 1, color = "black") +
+  annotate("text", x=4, y=105, label="Luf", angle=0, size=6, color="black") +
+    annotate("text", x=14, y=105, label="Ninigo", angle=0, size=6, color="black") +
+    annotate("text", x=23, y=105, label="Aua", angle=0, size=6, color="black") +
+      annotate("text", x=27, y=105, label="Wuvulu", angle=0, size=6, color="black") +
+  theme_bw()+
+theme(axis.text.y=element_text(size=10, angle = 0),
+      axis.title.x = element_text(vjust = -0.5),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+
+
+
+
+```
+
+###### Coral Groups Only
+
+```{r}
+
+#############################
+
+bleach_site_west<- bleach_site %>%
+  filter(region == "Western Islands")
+
+ggplot(bleach_site_west, aes(ps_site_id, cover, fill = functional_group2))+
+  geom_bar(stat = "identity", color = "black", width = 1) +
+ scale_fill_manual(name = "", values =c(  "hard coral - live" = "yellow", "hard coral - dead" = "black","hard coral - bleached" = "gray80" ) ) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 90))+
+  coord_flip() +
+  xlab("")+
+  ylab("% Benthic Cover")+
+   geom_vline(xintercept = c(7.5, 21.5,24.5), linetype ="longdash", size= .5, color = "black") +
+  annotate("text", x=4, y=80, label="Luf", angle=0, size=6, color="black") +
+    annotate("text", x=16, y=80, label="Ninigo", angle=0, size=6, color="black") +
+    annotate("text", x=23, y=80, label="Aua", angle=0, size=6, color="black") +
+      annotate("text", x=27, y=80, label="Wuvulu", angle=0, size=6, color="black") +
+  theme_bw()+
+theme(axis.text.y = element_text(size=0, angle = 0),
+      axis.text.x= element_text(size=14,angle = 0),
+      axis.ticks.y=element_blank(), 
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+```
+
+###### Metrics
+
+```{r}
+
+metri_west<-bleach_site_all_west %>%
+  filter(functional_group2 %in% c("hard coral - live", "hard coral - bleached","hard coral dead","cyanobacteria")) %>%
+  pivot_wider(id_cols = c(ps_site_id, subregion),names_from = functional_group2, values_from = cover)
+
+
+metri_west_all<-bleach_site_all_west %>%
+    pivot_wider(id_cols = c(ps_site_id, subregion),names_from = functional_group2, values_from = cover)
+
+# high erect algae
+
+stationss<- 
+algae<-cover_by_station_and_taxa%>%
+  filter(functional_group == 'erect algae') %>%
+  left_join(stations_uvs, by = "ps_station_id") %>%
+  filter(region == "Western Islands")
+
+alg_sit<-algae %>%
+  filter(ps_site_id %in% c("PNG_2024_uvs_077","PNG_2024_uvs_078"))
+
+
+# What are the dominant groups per site
+dom_manus<-
+  slice_max( bleach_site_all_west, order_by = cover, by=ps_site_id)
+
+
+```
+
+# Coral Genus
+
+##### Site
+
+```{r}
+
+gen_leg1<-read_excel("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/raw/benthos/PS_PNG_Leg_1_AJKM_GENUS_FINAL.xlsx", sheet = 1)
+
+gen_leg2<-read_excel("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/raw/benthos/PS_PNG_Leg_2_AJKM_Coral_Long_FINAL_1.xlsx", sheet = 1)
+
+gen_leg1<-gen_leg1[,c("Site","Transect_length","Depth","Genus")]
+names(gen_leg1)<-c("site","transect_length","depth", "genus")
+gen_leg2<-gen_leg2[,c("Site","Transect_length","Depth","Genus")]
+names(gen_leg2)<-c("site","transect_length","depth", "genus")
+
+gen<-rbind(gen_leg1, gen_leg2)
+
+gen<-distinct(gen)
+
+
+# Need to clean up labels to match with metadata
+gen$ps_site_id<-gen$site
+gen$ps_site_id<-gsub("_","_2024_uvs_", gen$ps_site_id)
+gen<- gen %>% dplyr::mutate(label = str_extract(site, "[^_]+$"))
+gen$ps_station_id<-ifelse(gen$depth <"6m", paste("PNG_2024_uvs", "5m", gen$label, sep = "_"), 0)
+gen$ps_station_id<-ifelse(gen$depth > "6m" | gen$depth < "14m", paste("PNG_2024_uvs", "10m", gen$label, sep = "_"), gen$ps_station_id)
+gen$ps_station_id<-ifelse(gen$depth >="15m", paste("PNG_2024_uvs", "20m", gen$label, sep = "_"), gen$ps_station_id)
+
+gen$site<-NULL
+gen$label<-NULL
+
+
+# Genera
+gen_site_mean<-gen %>%
+  group_by(ps_site_id, genus) %>%
+  dplyr::summarise(length = length(genus)) %>%
+  group_by(ps_site_id) %>%
+  dplyr::summarise(count = sum(length)) %>%
+  left_join(sites_uvs[,c("ps_site_id","region","subregion","habitat","exposure")]) %>%
+  dplyr::group_by(region) %>%
+  dplyr::summarise(mean = mean(count), x1 = count[which.min(count)], x2 = count[which.max(count)]) 
+
+gen_site_richness<-gen %>%
+  left_join(sites_uvs[,c("ps_site_id","region","subregion","habitat","exposure")]) %>%
+   distinct(region, genus) %>%
+  group_by(region) %>%
+   dplyr::summarise(richness = length(genus))
+  
+ 
+gen_region<-cbind(gen_site_mean, gen_site_richness[,c("richness")])
+gen_region$region2<- factor(gen_region$region, levels = c("Murat","Lovongai" ,"Manus","Western Islands"))
+
+
+
+ggplot(gen_region, aes(x=region2, y= richness)) + 
+ geom_col(fill = "gray90", color = "black", size = .5)+
+geom_text(aes(x = region2, y = mean), label = "--------------------", size = 6, color = "black")+
+geom_point(aes(region2, mean, color = region2),  size = 10)+
+ scale_color_manual(values= c("Murat" = "darkblue","Lovongai" = "lightblue",
+ "Manus" = "coral", "Western Islands" = "gold"))+
+  ylab("Generic Coral Richness")+
+  theme_bw()+
+  xlab("")+
+ scale_y_continuous(expand = c(0, 70)) +
+   scale_y_continuous(expand = c(0, 0)) +
+  theme(legend.position = "none",
+        panel.grid = element_blank(),
+        axis.title.y = element_text(size = 14),
+        axis.text=element_text(size=12))
+
+
+
+```
+
+##### Region Richness
+
+```{r}
+gen_reg_richness<-gen %>%
+  left_join(sites_uvs[,c("ps_site_id","region","subregion","habitat","exposure")] ) %>%
+ group_by(region, genus) %>%
+  distinct(region, genus) %>%
+  mutate(rep = 1)%>%
+  group_by(region)%>%
+  dplyr::summarize(richness = sum(rep))
+
+
+
+  Rep=rep(1,nrow(gen_reg))
+  summarise(num = length(genus))%>%
+  group_by(region) %>%
+  summarise(mean = mean(num)) 
+  
+unique(gen$genus) # 68
+
+```
+
+# Recruits
+
+##### Subregion densities
+
+```{r}
+
+load("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/recruits/PNG_2024_uvs_recruit.RData")
+
+density_region <- recruit_observations %>%
+ # filter(region == "Murat") %>%
+  mutate(Rep = 1)%>%
+    group_by(region, subregion, ps_site_id) %>%
+  dplyr::summarize(count = sum(Rep)) %>%
+  left_join(recruit_quad_area_by_site[,c("ps_site_id","area_m2")],., by = "ps_site_id") %>%
+    group_by(region, subregion)%>%
+  dplyr::summarize(count = sum(count), area = sum(area_m2)) %>%
+      group_by(region, subregion, count, area)%>%
+  dplyr::summarize(density = count/area)
+    
+
+```
+
+##### Merging recruit and benthic LPI data for Lovongai
+
+```{r}
+total_site_recruits<-recruit_observations %>% mutate(Rep = 1) %>% group_by(ps_site_id, region, subregion )%>%dplyr::summarise(count = sum(Rep))
+
+recruits_functional_groups_Lovongai<-total_site_recruits %>% left_join(recruit_quad_area_by_site[,c("ps_site_id", "area_m2")], by = "ps_site_id") %>%
+   left_join(benthic_sites[,c("ps_site_id","cover","functional_group")], by = "ps_site_id") %>%
+   filter(region == "Lovongai") %>%
+   mutate(dens = count/area_m2)
+```
+
+##### Scatterplot - Algae and Cyan vs recruits
+
+```{r}
+
+ erect_cyan<-recruits_functional_groups_Lovongai %>%
+   filter(functional_group %in% c("cyanobacteria","erect algae","turf", "encrusting algae")) %>%
+   group_by(ps_site_id, subregion, dens) %>%
+   dplyr::summarise(cover = sum(cover))
+
+ggplot(erect_cyan, aes(dens, cover)) +
+ geom_point(pch = 21, size = 6, col = "black", fill = "tomato4", lwd=3)+
+  geom_smooth(method='lm', formula= y~x, col="gray60")+
+  ylab("Cyanobacteria and Algae")+
+  xlab("coral recruits (< 5cm) per m2")+
+  ylim(10,70)+
+  theme_bw()+
+    theme(legend.position = "none",
+        panel.grid = element_blank(),
+        axis.title.y = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text=element_text(size=12),
+        axis.text.x = element_text(size = 12))
+
+
+ 
+ 
+```
+
+##### Scatterplot - Coral/CCA vs recruits
+
+```{r}
+ccacoral<-recruits_functional_groups_Lovongai %>%
+   filter(functional_group %in% c("hard coral","cca")) %>%
+   group_by(ps_site_id, subregion, dens) %>%
+   dplyr::summarise(cover = sum(cover))
+
+ggplot(ccacoral, aes(dens, cover)) +
+ geom_point(pch = 21, size = 6, fill = "yellow",  lwd=3)+
+ geom_smooth(method='lm', formula= y~x, col="gray60")+
+  ylab("CCA and Coral cover")+
+  xlab("coral recruits (< 5cm) per m2")+
+  ylim(10,70)+
+  theme_bw()+
+    theme(legend.position = "bottom",
+        panel.grid = element_blank(),
+        axis.title.y = element_text(size = 16),
+        axis.title.x = element_text(size = 16),
+        axis.text=element_text(size=12),
+        axis.text.x = element_text(size = 12))
+
+```
+
+# Inverts
+
+### Basic metrics
+
+```{r}
+
+load("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/invert/PNG_2024_uvs_invert.RData")
+
+# Interested in seeing number density by subregion by resource inverts
+invert_subregion_area<-invert_transect_area %>%
+  left_join(sites_uvs[,c("region","subregion","ps_site_id")], by ="ps_site_id") %>%
+  group_by(region,subregion)%>%
+  mutate(area_m2 = as.numeric(area_m2), n_transects = as.numeric(n_transects)) %>%
+  dplyr::summarize(total_area_m2 = sum(area_m2), total_transects = sum(n_transects))
+
+### Getting Richness
+invert_richness<-invert_observations %>%
+    left_join(sites_uvs[,c("region","subregion","ps_site_id")], by ="ps_site_id") %>%
+   filter(region %in% c("Lovongai","Murat")) %>%
+  distinct(region,subregion, ps_site_id, taxa) %>%
+  mutate(rep = 1) %>%
+  group_by(region, subregion, ps_site_id) %>%
+  dplyr::summarise(richness = sum(rep))
+
+
+### Getting Abudnance
+invert_abundance<-invert_observations %>%
+    left_join(sites_uvs[,c("region","subregion","ps_site_id")], by ="ps_site_id") %>%
+   group_by(region, subregion, ps_site_id) %>%
+  dplyr::summarise(abundance = sum(count))
+
+
+
+```
+
+### TreeMap - Overall
+
+```{r}
+### InvertTotal
+inverts_rich<-unique(invert_taxa_table[,c("phylum", "class", "order", "family", "genus", "taxa")]) %>%
+  filter(!phylum %in% c("Annelida"))
+unique(inverts_rich$family) # 49 families
+
+
+### Inverts
+invertsTree<-unique(invert_taxa_table[,c("phylum", "class", "order", "family", "genus", "taxa")]) %>%
+  mutate(Rep = 1) %>%
+  group_by(phylum, class, family) %>%
+  summarise(n=sum(Rep)) %>%
+  filter(!phylum %in% c("Porifera"))
+  
+
+ggplot(invertsTree, aes(area = n,
+                   fill = phylum,
+                   subgroup = phylum,
+                   subgroup2 = class,
+                   subgroup3 = family,
+                   label = paste(family,n, sep ="\n"))) +
+  treemapify::geom_treemap(show.legend = T)+
+  # treemapify::geom_treemap_text(colour = "black", place = "middle", reflow = T, min.size = 3)+
+  labs(fill = "",
+       title = "")+
+  geom_treemap_text(colour = "black",
+                    place = "centre",
+                    size = 15)+
+  geom_treemap_subgroup_border(colour = "white", size = 2)+
+  scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(24))+
+  # guides(fill = guide_legend(nrow=5,byrow=TRUE))
+  theme(legend.position = "bottom")
+
+```
+
+### Murat
+
+##### TreeMap
+
+```{r}
+
+
+### Inverts
+invertsTree_murat<-invert_observations %>%
+    left_join(sites_uvs[,c("region","subregion","ps_site_id")], by ="ps_site_id") %>%
+  filter(region == "Murat") %>%
+  distinct(taxa)%>%
+  left_join(invert_taxa_table, by = "taxa") %>%
+  data.frame()%>%
+  mutate(Rep = 1) %>%
+  group_by(phylum, class, family) %>%
+  summarise(n=sum(Rep)) %>%
+  filter(!phylum %in% c("Porifera"))
+  
+ggplot(invertsTree_murat, aes(area = n,
+                   fill = phylum,
+                   subgroup = phylum,
+                   subgroup2 = class,
+                   subgroup3 = family,
+                   label = paste(family,n, sep ="\n"))) +
+  treemapify::geom_treemap(show.legend = T)+
+  # treemapify::geom_treemap_text(colour = "black", place = "middle", reflow = T, min.size = 3)+
+  labs(fill = "",
+       title = "")+
+  geom_treemap_text(colour = "black",
+                    place = "centre",
+                    size = 15)+
+  geom_treemap_subgroup_border(colour = "white", size = 2)+
+  scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(24))+
+  # guides(fill = guide_legend(nrow=5,byrow=TRUE))
+  theme(legend.position = "bottom")
+
+```
+
+##### Richness
+
+```{r}
+rich_murat <- invert_richness %>%
+  filter(region == "Murat") 
+
+murat_stat<-aov(richness ~ subregion, data = rich_murat)
+summary(murat_stat)
+TukeyHSD(murat_stat)
+
+
+ggplot(rich_murat, aes(x=subregion, y=richness)) + 
+  geom_boxplot()+
+  geom_point(aes(color = subregion, fill = subregion), pch = 21, size = 6, col = "Black", lwd=3)
+
+
+```
+
+##### Abundance
+
+```{r}
+abun_murat <- invert_abundance %>%
+  filter(region == "Murat") 
+
+murat_abun_stat<-aov(abundance ~ subregion, data = abun_murat)
+summary(murat_abun_stat)
+TukeyHSD(murat_abun_stat)
+
+
+ggplot(abun_murat, aes(x=subregion, y=abundance)) + 
+  geom_boxplot()+
+  geom_point(aes(color = subregion, fill = subregion), pch = 21, size = 6, col = "Black", lwd=3)
+
+
+
+
+
+```
+
+##### Venn Diagram
+
+```{r}
+ven_murat<-invert_observations %>%
+    left_join(sites_uvs[,c("region","subregion","ps_site_id")], by ="ps_site_id") %>%
+  filter(region == "Murat") %>%
+  distinct(subregion, family,taxa)
+unique(ven_murat$family) #30
+unique(ven_murat$taxa) #64
+
+
+vennlist<-split(ven_murat$taxa,ven_murat$subregion)
+mus<-vennlist$Massau
+emi<-vennlist$Emirau
+ten<-vennlist$Tench
+intersect(intersect(mus,emi),ten)
+
+ggVennDiagram(vennlist, label_alpha = 0, 
+              label_size = 4) +
+  ggtitle("Taxa only")+
+  scale_fill_gradient(low = "white", high = "red")
+
+```
+
+##### Giant Clams
+
+```{r}
+
+gc_murat<-invert_observations %>%
+  filter(common_name == "Giant clams" & transect != "Off") %>%
+      right_join(invert_transect_area, by = "ps_site_id") %>%
+    group_by(ps_site_id, area_m2) %>%
+dplyr::summarise(n_individuals = sum(count))%>%
+    group_by(ps_site_id,area_m2, n_individuals) %>%
+dplyr::summarise(ind_m2 = round((n_individuals/area_m2),2)) %>%
+     mutate(ind_m2 = ifelse(is.na(ind_m2),0,ind_m2), n_individuals = ifelse(is.na(n_individuals),0,n_individuals)) %>%
+    right_join(sites_uvs[,c("region","subregion","locality", "ps_site_id")], by = "ps_site_id") %>%
+      filter(region == "Murat") 
+  
+ 
+ggplot(gc_murat, aes(x=subregion, y= ind_m2)) + 
+  geom_point(aes(color = subregion, fill = subregion), pch = 21, size = 6, col = "Black")+
+  stat_summary(fun.y = "mean", fun.ymin = "mean", fun.ymax= "mean", size= 0.3, geom = "crossbar") +
+    scale_fill_manual(values= c("Mussau" = "yellow2",
+        "Emirau" = "dodgerblue", "Tench"=  "gray20"))+
+  ylab("Giant clams per m2")+
+  theme_bw()+
+  xlab("")+
+  geom_hline(yintercept = 0.1, linetype="dotted", 
+               color = "black", size=1.0)+
+  theme(legend.position = "none",
+        panel.grid = element_blank(),
+        axis.title.y = element_text(size = 16),
+        axis.text=element_text(size=12),
+        axis.text.x = element_text(size = 16))
+
+
+```
+
+### Lovongai
+
+##### TreeMap
+
+```{r}
+
+
+### Inverts
+invertsTree_lov<-invert_observations %>%
+    left_join(sites_uvs[,c("region","subregion","ps_site_id")], by ="ps_site_id") %>%
+  filter(region == "Lovongai") %>%
+ distinct(taxa)%>%
+  left_join(invert_taxa_table, by = "taxa") %>%
+  data.frame()%>%
+  mutate(Rep = 1) %>%
+  group_by(phylum, class, family) %>%
+  summarise(n=sum(Rep)) %>%
+  filter(!phylum %in% c("Porifera"))
+  
+ggplot(invertsTree_lov, aes(area = n,
+                   fill = phylum,
+                   subgroup = phylum,
+                   subgroup2 = class,
+                   subgroup3 = family,
+                   label = paste(family,n, sep ="\n"))) +
+  treemapify::geom_treemap(show.legend = T)+
+  # treemapify::geom_treemap_text(colour = "black", place = "middle", reflow = T, min.size = 3)+
+  labs(fill = "",
+       title = "")+
+  geom_treemap_text(colour = "black",
+                    place = "centre",
+                    size = 15)+
+  geom_treemap_subgroup_border(colour = "white", size = 2)+
+  scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(24))+
+  # guides(fill = guide_legend(nrow=5,byrow=TRUE))
+  theme(legend.position = "bottom")
+
+```
+
+##### Richness
+
+```{r}
+rich_lovongai<- invert_richness %>%
+  filter(region == "Lovongai") 
+
+lov_stat<-aov(richness ~ subregion, data = rich_lovongai)
+summary(lov_stat)
+TukeyHSD(lov_stat)
+
+
+ggplot(rich_lovongai, aes(x=subregion, y=richness)) + 
+  geom_boxplot()+
+  geom_point(aes(color = subregion, fill = subregion), pch = 21, size = 6, col = "Black", lwd=3)
+
+
+
+```
+
+##### Abundance
+
+```{r}
+abun_lov <- invert_abundance %>%
+  filter(region == "Lovongai") 
+
+lovongai_abun_stat<-aov(abundance ~ subregion, data = abun_lov)
+summary(lovongai_abun_stat)
+TukeyHSD(lovongai_abun_stat)
+
+
+ggplot(abun_lov, aes(x=subregion, y=abundance)) + 
+  geom_boxplot()+
+  geom_point(aes(color = subregion, fill = subregion), pch = 21, size = 6, col = "Black", lwd=3)
+
+
+
+
+
+```
+
+##### Shared taxa - too many subregions to do proper venn diagram
+
+```{r}
+ven_lov<-invert_observations %>%
+    left_join(sites_uvs[,c("region","subregion","ps_site_id")], by ="ps_site_id") %>%
+  filter(region == "Lovongai") %>%
+  distinct(subregion, family,taxa)
+data_frame()
+
+unique(ven_lov$family) #30
+unique(ven_lov$taxa) #64
+
+
+vennlist_lov<-split(ven_lov$taxa,ven_lov$subregion)
+ane<-vennlist_lov$Enelava
+au<-vennlist_lov$Au
+luk<-vennlist_lov$Nemto
+dun<-vennlist_lov$Dunung
+nai<-vennlist_lov$Neitab
+tin<-vennlist_lov$Tingwon
+tso<-vennlist_lov$Tsoilik
+kun<-vennlist_lov$Kung
+
+# None are shared across regions
+intersect(intersect(intersect(intersect(intersect(intersect(intersect(ane,au),luk),dun),nai),tin),tso), kun)
+
+## What about these three?
+intersect(intersect(au,dun),nai)
+
+## What about these two that are closer together?
+intersect(au,tin)
+
+### Can't do Venn cause too many - 8 subregions
+ggVennDiagram(vennlist_lov, label_alpha = 0, 
+              label_size = 4) +
+  ggtitle("Taxa only")+
+  scale_fill_gradient(low = "white", high = "red")
+# zero shared
+4+2+7+7+7+9+11
+((4+2+7+7+7+9+11)/68)*100
+
+```
+
+##### Giant Clams
+
+```{r}
+
+gc_lov<-invert_observations %>%
+  filter(common_name == "Giant clams" & transect != "Off") %>%
+      right_join(invert_transect_area, by = "ps_site_id") %>%
+    group_by(ps_site_id, area_m2) %>%
+dplyr::summarise(n_individuals = sum(count))%>%
+    group_by(ps_site_id,area_m2, n_individuals) %>%
+dplyr::summarise(ind_m2 = round((n_individuals/area_m2),2)) %>%
+     mutate(ind_m2 = ifelse(is.na(ind_m2),0,ind_m2), n_individuals = ifelse(is.na(n_individuals),0,n_individuals)) %>%
+    right_join(sites_uvs[,c("region","subregion","locality", "ps_site_id")], by = "ps_site_id") %>%
+      filter(region == "Lovongai") 
+ 
+ggplot(gc_lov, aes(x=subregion, y= ind_m2)) + 
+  geom_point(aes(color = subregion, fill = subregion), pch = 21, size = 6, col = "Black", lwd=3)+
+  stat_summary(fun.y = "mean", fun.ymin = "mean", fun.ymax= "mean", size= 0.3, geom = "crossbar") +
+   scale_fill_brewer(palette = "Set2")+
+  ylab("Giant clams per m2")+
+  theme_bw()+
+  xlab("")+
+  geom_hline(yintercept = 0.1, linetype="dotted", 
+               color = "black", size=1.0)+
+  theme(legend.position = "none",
+        panel.grid = element_blank(),
+        axis.title.y = element_text(size = 16),
+        axis.text=element_text(size=12),
+        axis.text.x = element_text(size = 16, angle = 45,hjust = 1))
+
+
+```
+
+### Manus
+
+##### Giant Clams
+
+```{r}
+
+gc_man<-invert_observations %>%
+  filter(common_name == "Giant clams" & transect != "Off") %>%
+      right_join(invert_transect_area, by = "ps_site_id") %>%
+    group_by(ps_site_id, area_m2) %>%
+dplyr::summarise(n_individuals = sum(count))%>%
+    group_by(ps_site_id,area_m2, n_individuals) %>%
+dplyr::summarise(ind_m2 = round((n_individuals/area_m2),2)) %>%
+     mutate(ind_m2 = ifelse(is.na(ind_m2),0,ind_m2), n_individuals = ifelse(is.na(n_individuals),0,n_individuals)) %>%
+    right_join(sites_uvs[,c("region","subregion","locality", "ps_site_id")], by = "ps_site_id") %>%
+      filter(region == "Manus") 
+
+
+ggplot(gc_man, aes(x=subregion, y= ind_m2)) + 
+  geom_point(aes(color = subregion, fill = subregion), pch = 21, size = 6, col = "Black")+
+  stat_summary(fun.y = "mean", fun.ymin = "mean", fun.ymax= "mean", size= 0.3, geom = "crossbar") +
+   scale_fill_brewer(palette = "Set2")+
+  ylab("Giant clams per m2")+
+  theme_bw()+
+  xlab("")+
+ geom_hline(yintercept = 0.1, linetype="dotted",                color = "black", size=1.0)+
+  theme(legend.position = "none",
+        panel.grid = element_blank(),
+        axis.title.y = element_text(size = 16),
+        axis.text=element_text(size=12),
+        axis.text.x = element_text(size = 16, angle = 45,hjust = 1))
+
+
+```
+
+### Westerm
+
+##### Giant Clams
+
+```{r}
+
+gc_west<-invert_observations %>%
+  filter(common_name == "Giant clams" & transect != "Off") %>%
+      right_join(invert_transect_area, by = "ps_site_id") %>%
+    group_by(ps_site_id, area_m2) %>%
+dplyr::summarise(n_individuals = sum(count))%>%
+    group_by(ps_site_id,area_m2, n_individuals) %>%
+dplyr::summarise(ind_m2 = round((n_individuals/area_m2),2)) %>%
+     mutate(ind_m2 = ifelse(is.na(ind_m2),0,ind_m2), n_individuals = ifelse(is.na(n_individuals),0,n_individuals)) %>%
+    right_join(sites_uvs[,c("region","subregion","locality", "ps_site_id")], by = "ps_site_id") %>%
+      filter(region == "Western Islands") 
+ 
+ggplot(gc_west, aes(x=subregion, y= ind_m2)) + 
+  geom_point(aes(color = subregion, fill = subregion), pch = 21, size = 6, col = "Black")+
+  stat_summary(fun.y = "mean", fun.ymin = "mean", fun.ymax= "mean", size= 0.3, geom = "crossbar") +
+   scale_fill_brewer(palette = "Set2")+
+  ylab("Giant clams per m2")+
+  theme_bw()+
+  xlab("")+
+  geom_hline(yintercept = 0.1, linetype="dotted", 
+               color = "black", size=1.0)+
+  theme(legend.position = "none",
+        panel.grid = element_blank(),
+        axis.title.y = element_text(size = 16),
+        axis.text=element_text(size=12),
+        axis.text.x = element_text(size = 16, angle = 45,hjust = 1))
+
+
+```
+
+# Appendices
+
+##### Invert
+
+```{r}
+
+# Invert
+
+apen_invert<-invert_observations %>%
+  left_join(sites_uvs[,c("region","subregion","ps_site_id")], by = "ps_site_id") %>%
+  distinct(region, taxa)%>%
+  left_join(invert_taxa_table[,c("taxa","common_name", "phylum","class", "order","family")], by = "taxa") %>%
+  mutate(rep = 1)%>%
+  pivot_wider(names_from = region, values_from = rep) 
+  
+
+apen_invert<-apen_invert[,c("common_name","phylum","class","order","family","taxa","Murat","Lovongai")]
+colnames(apen_invert)<-c("Common name","Phylum","Class","Order","Family","Taxa","Murat","Lovongai")
+apen_invert2<-ifelse(is.na(apen_invert[,c("Murat","Lovongai")]), "","X")
+appen_invert_final<-cbind(apen_invert[,1:6], apen_invert2)
+write.csv(appen_invert_final,"PNG_2024_Invert_Appendix.csv", row.names = F)
+
+
+```
+
+##### LPI
+
+```{r}
+
+
+apen_lpi<-cover_by_station_and_taxa %>%
+  left_join(lpi_stations[,c("ps_station_id","region")], by = "ps_station_id")%>%
+  group_by(region, morphotaxon) %>%
+  distinct(region, morphotaxon) %>%
+  left_join(lpi_morphotaxa[,c("morphotaxon","functional_group", "phylum","class", "order","family", "accepted_name")], by = "morphotaxon") %>%
+   group_by(region, functional_group, phylum,class, order,family, accepted_name)%>% 
+  drop_na(accepted_name)%>%
+  distinct(region, functional_group, phylum,class, order,family, accepted_name)%>%
+  mutate(rep = 1) %>%
+  pivot_wider(names_from = region, values_from = rep) %>%
+  # dropping this because there were other entries with the family...and sp1, 2, 3 not consistent across both expeditions
+drop_na(family)
+
+apen_lpi<-apen_lpi[,c("functional_group","phylum","class","order","family","accepted_name","Murat","Lovongai","Manus","Western Islands")]
+colnames(apen_lpi)<-c("Functional group","Phylum","Class","Order","Family","Taxa","Murat","Lovongai","Manus","Western Islands")
+apen_lpi2<-ifelse(is.na(apen_lpi[,c("Murat","Lovongai","Manus","Western Islands")]), "","X")
+appen_lpi_final<-cbind(apen_lpi[,1:6], apen_lpi2)
+write.csv(appen_lpi_final,"PNG_2024_LPI_Appendix.csv", row.names = F)
+
+
+```

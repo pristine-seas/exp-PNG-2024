@@ -144,6 +144,14 @@ colnames(seqTotalCheck_28S)[1]<-"Total"
 
 #### Abundance Filtration
 
+To filter or not to filter, that is the question.....
+
+Pros: Removes spurious low quantity of sequences that may arguably not be a part of the samples. There are lots of technical constraints that inflate the presence of sequences that would not be in your samples. These include: tag jumping, contamination from lab work, etc. Consider using if you have a large difference in sequencing depth across samples - especially for Invertebrate markers - and if you find low numbers of sequences from OTUs in your negatives and in contrast find a high number of sequences of the same OTU in your samples. Similarly, if you find you have a large number of sequences and OTUs in your negatives that are present in the real samples suggesting quite a bit of contamination, then this should be done more stringently (a higher removal value) or you should consider resequencing your samples.
+
+Cons: Could remove real sequence/organismal presence within your samples and it could remove rare species. If you are trying to detect the presence of rare species such as endangered species, don't use. In fact, if the goal of the project is species detection of any kind, skip this step.
+
+Here we filter.
+
 ```{r}
 
 abun_28S<-as.data.frame(neg_28S[,2:ncol(neg_28S)])
@@ -175,6 +183,8 @@ whole_28S2$Reads<-NULL
 ```
 
 ###### Investigating Abundance Filtration results
+
+This can help you gauge what filtration amount is reasonable given the technical constraints from the sequencer and/or contamination that could be in your sample. Based on some exploration of this, we chose 0.0001 (0.01%) in our abundance filtration code.
 
 ```{r}
 ##### What am I missing?
@@ -213,6 +223,14 @@ unique(taxaCheck5$removed)
 ```
 
 #### Collapsing Taxonomic Data
+
+To keep or not to keep ASVs, that is the question
+
+Pros: Removes duplicated taxonomic identifications. Takes a conservative approach to biodiversity questions. zOTUs/ASVS are now more on a OTU type scale based on "taxonomy" rather than sequencing.
+
+Cons: Duplicate IDs could be congeners without barcodes so collapseing would loose this "diversity". But this approach also tends to inflate diversity as it's more of a sequence approach based rather taxonomic.
+
+Here we collapse data
 
 ```{r}
 # If choose not to do abundance filtration, then switch whole_df with neg_df
@@ -264,6 +282,14 @@ collapse_28S <- collapse_28S %>% select(c("zotu_All","OTU"), everything())
 
 #### Rarfeying
 
+To rarefying or not to rarefy...that is the question
+
+Pros: Justifies comparisons across samples. A general principle of standard biodiversity surveys is that you will see more organisms the more you sample. The same is with sequencing. The samples with a deeper sequencing depth will have more "organisms". Thus, if you have interests comparing across sites, gradients, markers, etc. this should be done. In the marker comparison approach, in theory all markers should be rarefied to the same sequencing depth before evaluating their performance to make the "evaluation playing field" equal.
+
+Cons: You may loose real taxa in some samples. However, you loose less when you collapse the taxa first.
+
+Here we rarefy...
+
 ```{r}
 
 # For reports, merging all surface and bottom samples together
@@ -307,6 +333,7 @@ merged_28S<-right_join(collapse_28S[,1:9], replicateMerge_28S_rare, by = "OTU")
 ```
 
 # Updating Taxonomy via Worms
+Have to do this twice. The first time if identifies the mismatches. Then swap those out in the call and rerun so that all of the remaining classifications match.
 
 ```{r}
 
@@ -434,12 +461,21 @@ cleaned_data<-left_join(cleanTaxa_take4, sequence_data, by = "OTU")
 
 #### Adding Common Names - Target Taxa
 
+Common names are easier to communicate to the general public so we add them to the df. Mostly they are broad and general, however, if there are species or groups of interest, we will assign them their distinct common name.
+
+Additionally adding resource column based on whether the organism is fishing either commercially or locally. This may change based on places but the overall identification of these was taken from SPC files - Assessing Tropical Marine Invertebrates
+
 ```{r}
 
 
 cleaned_data <- cleaned_data %>%
-    mutate(., common_name = with(., case_when(
+   mutate(., common_name = with(., case_when(
+      (species == "Turbo marmoratus") ~ "Green snail",
         (genus == "Tridacna" | genus == "Hippopus") ~ "Giant clams",
+      (genus == "Pteria") ~ "Penguin wing",
+      (genus == "Charonia") ~ "Triton trumpet",
+        (genus == "Turbo") ~ "Turban snail",
+        (genus == "Lambis") ~ "Conch",
         (genus == "Pinctada") ~ "Pearl oyster" ,
         (genus == "Trochus") ~ "Trochus" ,
         (family == "Plakobranchidae" | family == "Volvatellidae") ~ "Sea slugs",
@@ -489,8 +525,20 @@ cleaned_data <- cleaned_data %>%
         (phylum == "Entoprocta") ~ 'Goblet worms',
         (phylum == "Chlorophyta") ~ "Green algae")))
 
+unk<-subset(cleaned_data, is.na(common_name))
+sort(cleaned_data$taxa)
 
 cleaned_data <- cleaned_data %>% select("common_name", everything()) 
+
+### Adding Resource Invert Column
+cleaned_data<- cleaned_data %>%
+    mutate(., resource_invert = with(., case_when(
+        (common_name %in% c("Sea cucumber","Giant clams","Pearl oyster", "Lobster","Trochus","Triton shell","Conch shell","Turban snail", "Octopus","Green snail","Triton trumpet", "Conch shell")) ~ "Y",
+(genus %in% c("Tripnuestes","Pteria","Echinothrix","Diadema","Heterocentrotus" )) ~ "Y"))) %>%
+  mutate(resource_invert = ifelse(!is.na(resource_invert), "Y","N"))
+
+
+cleaned_data <- cleaned_data %>% select("resource_invert", everything()) 
 
 
 ```
@@ -514,6 +562,7 @@ cleaned_data <- cleaned_data %>% select("type", everything())
 
 
 # Adding IUCN
+
 
 ```{r}
 # The functions are super picky....need to get a list of species and not blanks or NA can be in that list
@@ -559,15 +608,14 @@ cleaned_data[is.na(cleaned_data) ]<- ""
 cleaned_data<-cleaned_data %>% select(c("iucn_status"), everything()) 
 
 
-
 ```
 
 
-## Country Records
 
-#### GBIF - include IUCN
+# Country Records
+Here I'm drawing polygons based on EEZ zone from <https://www.marineregions.org/eezsearch.php> the country and using these coordinates within GBIF and OBIS to see whether a record for these species exist within the databases acknowledging that there are a number of gaps in these databases and the species that are not found may still be there. But this is the best and most efficient way in terms of time in narrowing the process down. Unfortunately species lists do not always exists.
 
-Get EEZ zone \@ <https://www.marineregions.org/eezsearch.php>
+#### GBIF 
 
 ```{r}
 
@@ -612,7 +660,13 @@ cleaned_data<-left_join(cleaned_data, All_ids, by = c("species"="scientificName"
 cleaned_data$PNG<-ifelse(is.na(cleaned_data$PNG),"No",cleaned_data$PNG)
 cleaned_data<-cleaned_data %>% select(c("PNG"), everything()) 
 
+```
 
+# Cleaned 28S
+
+With the cleaned file, making seperate files of the whole dataset to be applied towards exploration. 
+
+```{r}
 ### Need to get sequence data to attach to this output.
 
 ### Creating a sequence file in case you want to use for phylotree
@@ -634,14 +688,12 @@ otu_table <- otu_table %>% select("OTU", everything())
 otu_table$PNG<-NULL
 
 #### Everything together
-taxa_and_sample_metadata_by_site<-cleaned_data
+taxa_and_metadata_by_site<-cleaned_data
 
-#save(taxa_and_metadata_by_site, otu_table, sample_metadata_data_table,taxa_table, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_edna_28S.RData")
+save(taxa_and_metadata_by_site, otu_table, sample_metadata_data_table,taxa_table, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_edna_28S.RData")
 
 
-
-#write.csv(cleaned_data,"~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_Leg2_taxa_by_site_28S.csv", row.names = F)
+write.csv(cleaned_data,"~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/output/eDNA/PNG_2024_Leg2_taxa_by_site_28S.csv", row.names = F)
 
 ```
-
 
