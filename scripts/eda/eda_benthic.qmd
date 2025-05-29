@@ -73,6 +73,111 @@ site_lengths<-lpi_stations%>%
 
 ```
 
+### Transect Health Index
+
+```{r}
+
+PNG_benthos_health<-cover_by_station_and_taxa %>%
+    group_by(ps_station_id, functional_group2)%>%
+  dplyr::summarise(pct_cover=sum(pct_cover))%>%
+  pivot_wider(id_cols = c("ps_station_id"), names_from = functional_group2, values_from = pct_cover, values_fill = 0) %>%
+  data.frame ()
+
+PNG_benthos_health$algae<- PNG_benthos_health$erect.algae+PNG_benthos_health$turf
+
+PNG_benthos_health2<-PNG_benthos_health %>%
+  select(ps_station_id, cca, hard.coral...live, algae, cyanobacteria) %>% 
+  mutate(live_coral = hard.coral...live) %>%
+  mutate(., CCA_score = with(., case_when(
+    (cca >= 20 ) ~ "Excellent",
+    (cca < 20 & cca >= 10) ~ "Good",
+    (cca < 10 & cca >= 5) ~ "Fair",
+    (cca < 5 & cca >= 2) ~ "Poor",
+    (cca < 2) ~ "Very Poor"))) %>%
+mutate(., Coral_score = with(., case_when(
+  (live_coral >= 40 ) ~ "Excellent",
+  (live_coral < 40 & live_coral >= 30) ~ "Good",
+  (live_coral < 30 & live_coral >= 20) ~ "Fair",
+  (live_coral < 20 & live_coral >= 10) ~ "Poor",
+  (live_coral < 10) ~ "Very Poor"))) %>%
+  mutate(., Algae_score = with(., case_when(
+    (algae < 5 ) ~ "Excellent",
+    (algae <10  & algae >= 5) ~ "Good",
+    (algae < 20 & algae >= 10) ~ "Fair",
+    (algae < 30 & algae >= 20) ~ "Poor",
+    (algae >= 30) ~ "Very Poor"))) %>%
+  mutate(., Cyano_score = with(., case_when(
+    (cyanobacteria < 2 ) ~ "Excellent",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "Good",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "Fair",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "Poor",
+    (cyanobacteria >= 15) ~ "Very Poor"))) %>% 
+  mutate(., CCA_score_value = as.numeric(with(., case_when(
+    (cca >= 20 ) ~ "95",
+    (cca < 20 & cca >= 10) ~ "85",
+    (cca < 10 & cca >= 5) ~ "75",
+    (cca < 5 & cca >= 2) ~ "65",
+    (cca < 2) ~ "50")))) %>%
+  mutate(., Coral_score_value = as.numeric(with(., case_when(
+    (live_coral >= 40 ) ~ "95",
+    (live_coral < 40 & live_coral >= 30) ~ "85",
+    (live_coral < 30 & live_coral >= 20) ~ "75",
+    (live_coral < 20 & live_coral >= 10) ~ "65",
+    (live_coral < 10) ~ "50")))) %>%
+  mutate(., Algae_score_value = as.numeric(with(., case_when(
+    (algae < 5 ) ~ "95",
+    (algae <10  & algae >= 5) ~ "85",
+    (algae < 20 & algae >= 10) ~ "75",
+    (algae < 30 & algae >= 20) ~ "65",
+    (algae >= 30) ~ "50")))) %>%
+  mutate(., Cyano_score_value = as.numeric(with(., case_when(
+    (cyanobacteria < 2 ) ~ "95",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "85",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "75",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "65",
+    (cyanobacteria >= 15) ~ "50")))) %>%
+  mutate(rank_value = (CCA_score_value +Coral_score_value +Algae_score_value +Cyano_score_value)/4) %>%
+  mutate(., Rank_score = with(., case_when( 
+    (rank_value >= 90 ) ~ "Excellent",
+    (rank_value < 90 & rank_value >= 80) ~ "Good",
+    (rank_value < 80 & rank_value >=70) ~ "Fair",
+    (rank_value < 70 & rank_value >=60) ~ "Poor",
+    (rank_value < 60) ~ "Very Poor"))) %>%
+  left_join(stations_uvs[,c("ps_station_id","ps_site_id","region","subregion","locality","habitat","exposure")], by = "ps_station_id")
+
+# Getting percentage of combined Poor and VeryPoor
+poor_region_sites<-PNG_benthos_health2 %>%
+  group_by(region) %>%
+  reframe(rank = rank_value<70) %>%
+  group_by(region, rank) %>%
+  tally() %>%
+  pivot_wider(id_cols = region, names_from = rank, values_from = n) %>%
+  rename(other = "FALSE", poor = "TRUE") %>%
+  data_frame() %>%
+ mutate(total = other + poor)%>%
+  mutate(poor_per = (poor/total)*100)
+  
+  
+# Getting percentage of combined Good and Excellent categories
+good_region_sites<-PNG_benthos_health2 %>%
+  group_by(region) %>%
+  reframe(rank = rank_value>80) %>%
+  group_by(region, rank) %>%
+  tally() %>%
+  pivot_wider(id_cols = region, names_from = rank, values_from = n) %>%
+  rename(other = "FALSE", good = "TRUE") %>%
+  data_frame() %>%
+ mutate(total = other + good)%>%
+  mutate(good_per = (good/total)*100)
+
+# exposure
+PNG_benthos_health2 %>% 
+  group_by(Rank_score, habitat) %>%
+  tally()
+
+
+```
+
 ## Region Cover
 
 Creating region lengths to summarize percent cover at region level which is applied to all region graphs.
@@ -123,6 +228,60 @@ theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
  
 ```
 
+#### With Bleaching Functional Group
+
+Stacked Barplot
+
+```{r}
+
+benthic_region_bleach<-cover_by_station_and_taxa %>% 
+  left_join(lpi_stations[,c("region", "ps_station_id","depth_strata")],.,by = "ps_station_id") %>%
+  group_by(region,functional_group2) %>%
+    dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
+  left_join(region_lengths,., by = "region") %>%
+  mutate(cover = sum/length) %>%
+  mutate(hig_sd = max-cover, low_sd = min-cover)
+
+
+benthic_region_bleach$region2<-factor(benthic_region_bleach$region, levels = c("Murat","Lovongai","Manus","Western Islands"))
+
+
+benthic_region_bleach$functional_group3 <- factor(benthic_region_bleach$functional_group2, levels=c('sediment/rubble/barren',"other","sponges",'cyanobacteria', 'turf','erect algae','encrusting algae',"soft coral", 'cca', 'hard coral - dead', "hard coral - bleached", "hard coral - live"))
+
+
+
+## Percent Cover
+ggplot(benthic_region_bleach, aes(region2, cover, fill = functional_group3))+
+  geom_bar(stat = "identity", color = "black") +
+ scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral - live" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue", "hard coral - bleached" = "white", "hard coral - dead" = "black" ) )  +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 110))+
+  xlab("Region")+
+  ylab("% Benthic Cover")+
+    theme_bw()+
+theme(axis.text=element_text(size=12,  hjust = 1),
+      axis.title.x = element_text(size = 16),
+        axis.title=element_text(size=16),
+      legend.text=element_text(size=14),
+        strip.background =element_rect(fill="white"),
+  strip.text = element_text(colour = 'black', size = 16, face="bold"),
+  panel.spacing = unit(2, "lines"),
+        plot.title = element_text( size = 20, face = "bold"),
+        legend.position = "bottom")
+
+
+allsub<-benthic_subregion_bleach%>%
+  pivot_wider(id_cols = c(region,subregion), names_from = functional_group2, values_from = cover)
+
+lov_sub<-benthic_subregion_bleach %>%
+  filter(region == "Lovongai") %>%
+  pivot_wider(id_cols = subregion, names_from = functional_group2, values_from = cover)
+
+manu_sub<-benthic_subregion_bleach %>%
+  filter(region == "Manus") %>%
+  pivot_wider(names_from = functional_group2, values_from = cover, id_cols = subregion)
+  
+```
+
 #### Cover Groups Only
 
 Only coral functional groups (live, dead, bleached) in stacked barplot which is applied to all subregion graphs.
@@ -138,12 +297,13 @@ bleach_region<-cover_by_station_and_taxa %>%
    filter(region != "Murat") %>%
   filter(functional_group2 %in% c("hard coral - dead","hard coral - bleached", 'hard coral - live'))
 
+bleach_region$functional_group2<-factor(bleach_region$functional_group2, levels = c("hard coral - dead","hard coral - bleached",'hard coral - live'))
 
 
  ## Percent Cover
 ggplot(bleach_region, aes(region, cover, fill = functional_group2))+
   geom_bar(stat = "identity", color = "black", width = 0.75) +
-scale_fill_manual(name = "", values =c(  "hard coral - live" = "yellow", "hard coral - dead" = "black","hard coral - bleached" = "gray80" ) ) +
+scale_fill_manual(name = "", values =c(  "hard coral - live" = "yellow", "hard coral - bleached" = "white","hard coral - dead" = "black" ) ) +
   scale_y_continuous(expand = c(0, 0), limits = c(0, 101))+
   coord_flip() +
   xlab("")+
@@ -239,7 +399,6 @@ subregion_lengths<-lpi_stations%>%
    dplyr::summarise(length=length(ps_station_id))
 ```
 
-
 #### Original Functional Group
 
 Stacked BarGraph based on original functional groups.
@@ -296,9 +455,7 @@ theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
 
 ```
 
-
-#### With Bleaching Functional Group 
-
+#### With Bleaching Functional Group
 
 Stacked Barplot
 
@@ -509,9 +666,7 @@ theme(axis.text=element_text(size=12, angle = 45, hjust = 1),
 
 ## Individual Subregions
 
-
-#### Data Set-up 
-
+#### Data Set-up
 
 ##### Original Functional Group
 
@@ -763,9 +918,7 @@ theme(axis.text.y=element_text(size=10, angle = 0),
 
 ```
 
-
-######  Coral Groups Only
-
+###### Coral Groups Only
 
 ```{r}
 
@@ -910,9 +1063,7 @@ theme(axis.text.y=element_text(size=10, angle = 0),
 
 ```
 
-
-######  Coral Groups Only
-
+###### Coral Groups Only
 
 ```{r}
 
