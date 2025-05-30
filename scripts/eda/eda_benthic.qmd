@@ -73,7 +73,13 @@ site_lengths<-lpi_stations%>%
 
 ```
 
-### Transect Health Index
+### Transect Health Asessment Index
+
+Health Index derived from live coral cover, algae, cca, and cyanobacteria. Coral cover, cca, and macroalgae percentage caare based from Boyle et al. 2017 as shown in the below image. However, here erect algae and turf are added together to create an "algae" category. The cyanobacteria category for Very Poor I set at  \>=15% based on Puyana et al. 2014 that had \>15% of the reef cover as an indicator of an unbalanced degrading system. The other categories I did fairly arbitrarily: Poor 10-15%, Fair 5-10%, Good 2-5%, and Excellent as \<2% cover. 
+
+![](images/clipboard-2837370005.png)\
+
+For each transect, averages within the final score column to each category were assigned based on where the LPI cover value was within the ranges. The exception being the Very Poor category which I assigned a 50 to any value under 60. So for example, if live coral cover was 45%, then that was assigned 95 and if algae was 45%, it was assigned 50. These 4 categories were then averaged across each transect and the resulting value was compared back to the Final Score column. If the overall transect average was 72, then that transect is placed in the Fair category.
 
 ```{r}
 
