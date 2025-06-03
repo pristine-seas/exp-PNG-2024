@@ -684,8 +684,10 @@ benthic_sites<-cover_by_station_and_taxa %>%
   group_by(region,subregion, locality, ps_site_id, functional_group) %>%
     dplyr::summarize(min=min(pct_cover),max=max(pct_cover), sum=sum(pct_cover)) %>%
   left_join(site_lengths,., by = "ps_site_id") %>%
-  mutate(cover = sum/length)
-
+  mutate(cover = sum/length)  %>%
+  mutate(site_number = stri_sub(ps_site_id,-3,-1))
+           
+           
 benthic_sites%>%
    group_by(ps_site_id)  %>%
     dplyr::summarise(percent = sum(cover))
@@ -778,7 +780,7 @@ benthic_sites_murat <- benthic_sites %>%
 ################## 
 ##################
 
-ggplot(benthic_sites_murat, aes(ps_site_id, cover, fill = functional_group))+
+ggplot(benthic_sites_murat, aes(site_number, cover, fill = functional_group))+
   geom_bar(stat = "identity", color = "black") +
  scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue" ) ) +
   scale_y_continuous(expand = c(0, 0), limits = c(0, 110))+
@@ -791,7 +793,7 @@ ggplot(benthic_sites_murat, aes(ps_site_id, cover, fill = functional_group))+
 
   theme_bw()+
 theme(axis.text.y=element_text(size=10, angle = 0),
-      axis.text.x=element_text(size=0, angle = 0),
+     # axis.text.x=element_text(size=0, angle = 0),
         axis.title=element_text(size=16),
       legend.text=element_text(size=14),
         strip.background =element_rect(fill="white"),
@@ -831,25 +833,23 @@ murat_soft_corals<-benthic_sites_taxa_murat %>%
 
 ```{r}
 
-
-
 benthic_sites_Lovongai <- benthic_sites %>%
   filter(region == "Lovongai")  %>% 
   mutate(ps_site_id = fct_reorder(ps_site_id, subregion)) 
 
 
-benthic_sites_Lovongai$ps_site_id2<- factor(benthic_sites_Lovongai$ps_site_id, levels = c('PNG_2024_uvs_023', 'PNG_2024_uvs_024', "PNG_2024_uvs_025", "PNG_2024_uvs_026", "PNG_2024_uvs_027",
-     "PNG_2024_uvs_034", "PNG_2024_uvs_035",
-    "PNG_2024_uvs_031","PNG_2024_uvs_032",
-    "PNG_2024_uvs_041",  "PNG_2024_uvs_042", 
-    "PNG_2024_uvs_028", "PNG_2024_uvs_029","PNG_2024_uvs_030",
-   "PNG_2024_uvs_038","PNG_2024_uvs_039", 
-   "PNG_2024_uvs_033",
-     "PNG_2024_uvs_036" ,"PNG_2024_uvs_037","PNG_2024_uvs_040"))
+benthic_sites_Lovongai$site_number2<- factor(benthic_sites_Lovongai$site_number, levels = c('023', '024', "025", "026", "027",
+     "034", "035",
+    "031","032",
+    "041",  "042", 
+    "028", "029","030",
+   "038","039", 
+   "033",
+     "036" ,"037","040"))
 
 
 ## Percent Cover
-ggplot(benthic_sites_Lovongai, aes(ps_site_id2, cover, fill = functional_group))+
+ggplot(benthic_sites_Lovongai, aes(site_number2, cover, fill = functional_group))+
   geom_bar(stat = "identity", color = "black", width = 0.9) +
  scale_fill_manual(name = "", values =c( "cca" = "pink", "soft coral" = "purple",  "encrusting algae" = "darkgreen", "erect algae" = "green3", "hard coral" = "yellow", "cyanobacteria" = "red", "other" = "lightblue", "sediment/rubble/barren" = "gray", "turf"="palegreen",  "sponges" = "dodgerblue" ) ) +
   scale_y_continuous(expand = c(0, 0), limits = c(0, 106))+
@@ -867,7 +867,7 @@ annotate("text", x=17, y=103, label="Kung", angle=0, size=4, color="black") +
 
   theme_bw()+
 theme(axis.text.y=element_text(size=10, angle = 0),
-      axis.text.x=element_text(size=0, angle = 0),
+     # axis.text.x=element_text(size=0, angle = 0),
         axis.title=element_text(size=16),
       legend.text=element_text(size=14),
         strip.background =element_rect(fill="white"),
