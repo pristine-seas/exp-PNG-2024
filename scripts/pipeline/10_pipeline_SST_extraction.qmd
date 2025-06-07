@@ -1,0 +1,397 @@
+---
+title: "10_pipeline_SST_extraction"
+format: html
+editor: visual
+author: "Molly Timmers"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# PNG Expedition SST Extraction
+
+### Load Packages
+
+```{r}
+
+rm(list = ls())
+
+pkgTest <- function(x)
+{
+  if (!require(x,character.only = TRUE))
+  {
+    install.packages(x,dep=TRUE,repos='http://cran.us.r-project.org')
+    if(!require(x,character.only = TRUE)) stop(x, " :Package not found")
+  }
+}
+
+
+# Create list of required packages
+list.of.packages <- c("ncdf4", "ggplot2", "sf", "dplyr", "rerddap","scales","RColorBrewer", "readxl","tidyverse", "stringr","stringi")
+ 
+
+# Create list of installed packages
+pkges = installed.packages()[,"Package"]
+
+# Install and load all required pkgs
+for (pk in list.of.packages) {
+  pkgTest(pk)
+}
+
+```
+
+### Data Setup
+
+```{r}
+
+sites<-readRDS("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/sites.rds")
+
+survey_df<-sites$uvs %>%
+  data.frame()
+
+
+```
+
+# Monthly SST Metrics
+
+## 2010-2025 CoralReef Watch SST data
+
+Take months for last 15 years as bleaching recovery could take that long. Gives the option of looking back 15 years and graphing that or sub-setting for the last 2-5 years.
+
+```{r}
+
+
+# Set ERDDAP address for Coral Reef Watch monthly Sea Surface Temperature (SST) means
+erddapSST_CRW <-'https://oceanwatch.pifsc.noaa.gov/erddap/griddap/CRW_sst_v3_1_monthly.csv?sea_surface_temperature'
+
+#Creating incomplete vectors to populate extracted data Start and End dates to extract data for last 10 years
+PNG_SST_monthly_means = rep(NA,11)
+survey_df$start<-'2010-01-01'
+survey_df$end<-'2025-04-01'
+
+
+# Loop through each survey data
+for (i in 1:nrow(survey_df)) {
+
+   # Create erddap URL by adding lat, lon, dates of each  point 
+
+   url = paste(erddapSST_CRW,"[(" ,survey_df$start[i], "):1:(" ,survey_df$end[i], ")][(" , survey_df$latitude[i],  "):1:(" ,survey_df$latitude[i], ")][(" ,survey_df$longitude[i], "):1:(",survey_df$longitude[i], ")]",sep = "")
+   
+
+   # Request and load satelite data from ERDDAP
+   new = read.csv(url, skip=2, header = FALSE) 
+   new$ps_site_id = survey_df[i, 'ps_site_id']
+     new$region = survey_df[i, 'region']
+   new$sublocation = survey_df[i, 'subregion']
+      new$habitat = survey_df[i, 'habitat']
+            new$exposure = survey_df[i, 'exposure']
+   new$lat = survey_df[i, 'latitude']
+   new$lon = survey_df[i, 'longitude']
+   # Append the data
+   PNG_SST_monthly_means = rbind(PNG_SST_monthly_means, new)   
+}
+
+# Delete the first row (default column names)
+PNG_SST_monthly_means = PNG_SST_monthly_means[-1, ]
+
+# Rename columns
+# You know your first three columns are data, lat, and lon from the loop. the date is the month/year and the lat_data and long data represent the closest 5km pixel where the data was extracted. 
+names(PNG_SST_monthly_means) <- c('date', 'lat_data', 'lon_data', 'SST', 'ps_site_id', 'region','subregion', 'habitat','exposure')
+
+
+write.csv(PNG_SST_monthly_means, "PNG_SST_monthly_means_2010_2025.csv", row.names = F)
+
+
+
+```
+
+# Daily  Metrics
+
+To look more specifically at locations around the time of the expedition, extracting daily measurements within one year of the expedition. This doens't just include the daily SST values, but the range of bleaching products that CRW puts out that includes an alert, degree heating weeks, anomalies, and hot spots. This link provides the specifics for each of these metrics: <https://coralreefwatch.noaa.gov/product/5km/methodology.php>
+
+## Daily SST
+
+Daily global 5 km SST values
+
+```{r}
+
+# Set ERDDAP address for Coral Reef Watch Bleaching Alert Area (BAA)
+daily_erddapSST_CRW <-'https://oceanwatch.pifsc.noaa.gov/erddap/griddap/CRW_sst_v3_1.csv?analysed_sst'
+
+
+
+#Creating incomplete vectors to populate extracted data Start and End dates to extract data for last 10 years
+PNG_SST_daily = rep(NA,11)
+survey_df$start<-'2023-10-01'
+survey_df$end<-'2024-10-01'
+
+
+# Loop through each survey data
+for (i in 1:nrow(survey_df)) {
+
+   # Create erddap URL by adding lat, lon, dates of each  point 
+
+   url = paste(daily_erddapSST_CRW,"[(" ,survey_df$start[i], "):1:(" ,survey_df$end[i], ")][(" , survey_df$latitude[i],  "):1:(" ,survey_df$latitude[i], ")][(" ,survey_df$longitude[i], "):1:(",survey_df$longitude[i], ")]",sep = "")
+   
+
+   # Request and load satelite data from ERDDAP
+   new = read.csv(url, skip=2, header = FALSE) 
+   new$ps_site_id = survey_df[i, 'ps_site_id']
+     new$region = survey_df[i, 'region']
+   new$sublocation = survey_df[i, 'subregion']
+      new$habitat = survey_df[i, 'habitat']
+            new$exposure = survey_df[i, 'exposure']
+   new$lat = survey_df[i, 'latitude']
+   new$lon = survey_df[i, 'longitude']
+   # Append the data
+   PNG_SST_daily = rbind(PNG_SST_daily, new)   
+}
+
+# Delete the first row (default column names)
+PNG_SST_daily = PNG_SST_daily[-1, ]
+
+
+# Rename columns
+# You know your first three columns are data, lat, and lon from the loop. the date is the month/year and the lat_data and long data represent the closest 5km pixel where the data was extracted. 
+names(PNG_SST_daily) <- c('date', 'lat_data', 'lon_data', 'SST', 'ps_site_id', 'region','subregion', 'habitat','exposure', 'latitude','longitude')
+
+
+write.csv(PNG_SST_daily, "PNG_SST_daily.csv", row.names = F)
+
+```
+
+## Bleaching Alert Area (BAA)
+
+Categories:
+
+0 - No Stress; 1 - Bleaching Watch; 2- Bleaching Warning; 3 - Bleaching Alert Level 1; 4 - Bleaching Alert Level 2
+
+For more information on the derived product go to:
+
+<https://coralreefwatch.noaa.gov/product/5km/methodology.php#baa>
+
+```{r}
+
+# Set ERDDAP address for Coral Reef Watch Bleaching Alert Area (BAA)
+bleach_erddapSST_CRW <-'https://oceanwatch.pifsc.noaa.gov/erddap/griddap/CRW_baa_max_7d_v1_0.csv?bleaching_alert_area'
+
+
+
+#Creating incomplete vectors to populate extracted data Start and End dates to extract data for last 10 years
+PNG_bleaching_alert_daily = rep(NA,11)
+survey_df$start<-'2023-10-01'
+survey_df$end<-'2024-10-01'
+
+
+# Loop through each survey data
+for (i in 1:nrow(survey_df)) {
+
+   # Create erddap URL by adding lat, lon, dates of each  point 
+
+   url = paste(bleach_erddapSST_CRW,"[(" ,survey_df$start[i], "):1:(" ,survey_df$end[i], ")][(" , survey_df$latitude[i],  "):1:(" ,survey_df$latitude[i], ")][(" ,survey_df$longitude[i], "):1:(",survey_df$longitude[i], ")]",sep = "")
+   
+
+   # Request and load satelite data from ERDDAP
+   new = read.csv(url, skip=2, header = FALSE) 
+   new$ps_site_id = survey_df[i, 'ps_site_id']
+     new$region = survey_df[i, 'region']
+   new$sublocation = survey_df[i, 'subregion']
+      new$habitat = survey_df[i, 'habitat']
+            new$exposure = survey_df[i, 'exposure']
+   new$lat = survey_df[i, 'latitude']
+   new$lon = survey_df[i, 'longitude']
+   # Append the data
+   PNG_bleaching_alert_daily = rbind(PNG_bleaching_alert_daily, new)   
+}
+
+# Delete the first row (default column names)
+PNG_bleaching_alert_daily = PNG_bleaching_alert_daily[-1, ]
+
+
+# Rename columns
+# You know your first three columns are data, lat, and lon from the loop. the date is the month/year and the lat_data and long data represent the closest 5km pixel where the data was extracted. 
+names(PNG_bleaching_alert_daily) <- c('date', 'lat_data', 'lon_data', 'BAA', 'ps_site_id', 'region','subregion', 'habitat','exposure', 'latitude','longitude')
+
+
+write.csv(PNG_bleaching_alert_daily, "PNG_SST_bleaching_alert_daily.csv", row.names = F)
+
+```
+
+## Degree Heating Weeks (DHW)
+
+For more information on the derived satellite product go to:
+
+<https://coralreefwatch.noaa.gov/product/5km/methodology.php#dhw>
+
+```{r}
+# Set ERDDAP address for Coral Reef Watch Degree Heating Weeks
+DHW_erddapSST_CRW <-'https://oceanwatch.pifsc.noaa.gov/erddap/griddap/CRW_dhw_v1_0.csv?degree_heating_week'
+
+
+
+#Creating incomplete vectors to populate extracted data Start and End dates to extract data for last 10 years
+PNG_DHW_daily = rep(NA,11)
+survey_df$start<-'2023-10-01'
+survey_df$end<-'2024-10-01'
+
+
+# Loop through each survey data
+for (i in 1:nrow(survey_df)) {
+
+   # Create erddap URL by adding lat, lon, dates of each  point 
+
+   url = paste(DHW_erddapSST_CRW,"[(" ,survey_df$start[i], "):1:(" ,survey_df$end[i], ")][(" , survey_df$latitude[i],  "):1:(" ,survey_df$latitude[i], ")][(" ,survey_df$longitude[i], "):1:(",survey_df$longitude[i], ")]",sep = "")
+   
+
+   # Request and load satelite data from ERDDAP
+   new = read.csv(url, skip=2, header = FALSE) 
+   new$ps_site_id = survey_df[i, 'ps_site_id']
+     new$region = survey_df[i, 'region']
+   new$sublocation = survey_df[i, 'subregion']
+      new$habitat = survey_df[i, 'habitat']
+            new$exposure = survey_df[i, 'exposure']
+   new$lat = survey_df[i, 'latitude']
+   new$lon = survey_df[i, 'longitude']
+   # Append the data
+   PNG_DHW_daily = rbind(PNG_DHW_daily, new)   
+}
+
+# Delete the first row (default column names)
+PNG_DHW_daily = PNG_DHW_daily[-1, ]
+
+
+# Rename columns
+# You know your first three columns are data, lat, and lon from the loop. the date is the month/year and the lat_data and long data represent the closest 5km pixel where the data was extracted. 
+names(PNG_DHW_daily) <- c('date', 'lat_data', 'lon_data', 'DHW', 'ps_site_id', 'region','subregion', 'habitat','exposure','latitude','longitude')
+
+
+write.csv(PNG_DHW_daily, "PNG_SST_DHW_heatstress_daily.csv", row.names = F)
+
+```
+
+## SST Anomaly
+
+For more information on the derived satellite product go to:
+
+<https://coralreefwatch.noaa.gov/product/5km/methodology.php#ssta>
+
+```{r}
+
+# Set ERDDAP address for Coral Reef Watch SST Anomaly
+Anomaly_erddapSST_CRW <-'https://oceanwatch.pifsc.noaa.gov/erddap/griddap/CRW_sst_anom_v1_0.csv?sea_surface_temperature_anomaly'
+
+
+#Creating incomplete vectors to populate extracted data Start and End dates to extract data for last 10 years
+PNG_Anomaly_daily = rep(NA,11)
+survey_df$start<-'2023-10-01'
+survey_df$end<-'2024-10-01'
+
+
+# Loop through each survey data
+for (i in 1:nrow(survey_df)) {
+
+   # Create erddap URL by adding lat, lon, dates of each  point 
+
+   url = paste(Anomaly_erddapSST_CRW,"[(" ,survey_df$start[i], "):1:(" ,survey_df$end[i], ")][(" , survey_df$latitude[i],  "):1:(" ,survey_df$latitude[i], ")][(" ,survey_df$longitude[i], "):1:(",survey_df$longitude[i], ")]",sep = "")
+   
+
+   # Request and load satelite data from ERDDAP
+   new = read.csv(url, skip=2, header = FALSE) 
+   new$ps_site_id = survey_df[i, 'ps_site_id']
+     new$region = survey_df[i, 'region']
+   new$sublocation = survey_df[i, 'subregion']
+      new$habitat = survey_df[i, 'habitat']
+            new$exposure = survey_df[i, 'exposure']
+   new$lat = survey_df[i, 'latitude']
+   new$lon = survey_df[i, 'longitude']
+   # Append the data
+   PNG_Anomaly_daily = rbind(PNG_Anomaly_daily, new)   
+}
+
+# Delete the first row (default column names)
+PNG_Anomaly_daily = PNG_Anomaly_daily[-1, ]
+
+
+# Rename columns
+# You know your first three columns are data, lat, and lon from the loop. the date is the month/year and the lat_data and long data represent the closest 5km pixel where the data was extracted. 
+names(PNG_Anomaly_daily) <- c('date', 'lat_data', 'lon_data', 'Anomaly', 'ps_site_id', 'region','subregion', 'habitat','exposure', 'latitude','longitude')
+
+
+write.csv(PNG_Anomaly_daily, "PNG_SST_Anomaly_daily.csv", row.names = F)
+```
+
+## Bleaching Hot Spot
+
+For more information on the derived satellite product go to:
+
+<https://coralreefwatch.noaa.gov/product/5km/methodology.php#hotspot>
+
+```{r}
+
+
+# Set ERDDAP address for Coral Reef Watch SST Anomaly
+HotSpot_erddapSST_CRW <-'https://oceanwatch.pifsc.noaa.gov/erddap/griddap/CRW_hs_v1_0.csv?hotspot'
+
+
+#Creating incomplete vectors to populate extracted data Start and End dates to extract data for last 10 years
+PNG_HotSpot_daily = rep(NA,11)
+survey_df$start<-'2023-10-01'
+survey_df$end<-'2024-10-01'
+
+
+
+
+# Loop through each survey data
+for (i in 1:nrow(survey_df)) {
+
+   # Create erddap URL by adding lat, lon, dates of each  point 
+   url = paste(HotSpot_erddapSST_CRW,"[(" ,survey_df$start[i], "):1:(" ,survey_df$end[i], ")][(" , survey_df$latitude[i],  "):1:(" ,survey_df$latitude[i], ")][(" ,survey_df$longitude[i], "):1:(",survey_df$longitude[i], ")]",sep = "")
+   
+   # Request and load satelite data from ERDDAP
+   new = read.csv(url, skip=2, header = FALSE) 
+   new$ps_site_id = survey_df[i, 'ps_site_id']
+     new$region = survey_df[i, 'region']
+   new$sublocation = survey_df[i, 'subregion']
+      new$habitat = survey_df[i, 'habitat']
+            new$exposure = survey_df[i, 'exposure']
+   new$lat = survey_df[i, 'latitude']
+   new$lon = survey_df[i, 'longitude']
+   # Append the data
+   PNG_HotSpot_daily = rbind(PNG_HotSpot_daily, new)   
+}
+
+# Delete the first row (default column names)
+PNG_HotSpot_daily = PNG_HotSpot_daily[-1, ]
+
+# Rename columns
+# You know your first three columns are data, lat, and lon from the loop. the date is the month/year and the lat_data and long data represent the closest 5km pixel where the data was extracted. 
+names(PNG_HotSpot_daily) <- c('date', 'lat_data', 'lon_data', 'HotSpot', 'ps_site_id', 'region','subregion', 'habitat','exposure', 'latitude',"longitude")
+
+
+write.csv(PNG_HotSpot_daily, "PNG_SST_bleaching_HotSpot_daily.csv", row.names = F)
+
+
+```
+
+## Pooled Daily Metrics
+
+```{r}
+
+PNG_SST_daily_metrics<-cbind(PNG_SST_daily,PNG_bleaching_alert_daily[,c("BAA")], PNG_DHW_daily[,c("DHW")],  PNG_HotSpot_daily[,c("HotSpot")], PNG_Anomaly_daily[,c("Anomaly")])
+
+names(PNG_SST_daily_metrics) <- c('date', 'lat_pixel', 'lon_pixel', 'SST', 'ps_site_id', 'region','subregion', 'habitat','exposure', 'latitude',"longitude", "BAA","DHW","HotSpot","Anomaly")
+
+PNG_SST_daily_metrics<-PNG_SST_daily_metrics[, c('date', 'SST', "BAA","DHW","HotSpot","Anomaly", 'ps_site_id', 'region','subregion', 'habitat','exposure', 'latitude',"longitude", 'lat_pixel', 'lon_pixel')]
+
+write.csv(PNG_SST_daily_metrics, "PNG_SST_daily_metrics.csv", row.names = F)
+
+### Loading in the Rdata file from the climatologies script and adding the PNG_SST_monthly_means and PNG_SST_daily_metrics to it to package it and saving it back as the same file name.
+
+load("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/satellite/PNG_satellite_SST.RData")
+
+save(PNG_SST_monthly_means, PNG_SST_daily_metrics, PNG_SST_climatology, PNG_region_thresholds, PNG_subregion_thresholds, file = "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/processed/satellite/PNG_satellite_SST.RData")
+
+
+
+```
