@@ -1,0 +1,261 @@
+---
+title: "eda_SST_satellite"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+## Load Packages
+
+```{r}
+
+rm(list = ls())
+
+pkgTest <- function(x)
+{
+  if (!require(x,character.only = TRUE))
+  {
+    install.packages(x,dep=TRUE,repos='http://cran.us.r-project.org')
+    if(!require(x,character.only = TRUE)) stop(x, " :Package not found")
+  }
+}
+
+
+# Create list of required packages
+list.of.packages <- c("ggplot2", "dplyr", "scales","RColorBrewer", "readxl","tidyverse", "stringr","stringi")
+ 
+
+# Create list of installed packages
+pkges = installed.packages()[,"Package"]
+
+# Install and load all required pkgs
+for (pk in list.of.packages) {
+  pkgTest(pk)
+}
+
+```
+
+## Data Setup
+
+Loading the RData file that has the SST time series data of the mean monthly values for Solomons for each site from 2014-2025 along with the maximum monthly mean (MMM) values by region and subregion which were calculated from the Coral Reef Watch (CRW) climatological range of 1985-2012.
+
+```{r}
+
+load("~/GitHub/PNG_2024/PNG_satellite_SST.RData")
+
+
+
+```
+
+### Maximum Monthly Mean (MMM) and Bleaching Threshold graph
+
+Using the SST values, grouping sites into regions and subregions, calculating means and graphing results, adding the MMM and threshold lines.
+
+#### Region
+
+```{r}
+
+PNG_month_region <- PNG_SST_monthly_means %>%
+  mutate(date = substr(date, 0, 10)) %>% 
+  group_by(date, region) %>%
+  dplyr::summarize(
+    count = n(),              # number of observations
+    SSTmean = mean(SST, na.rm = TRUE),    # mean value
+    SSTmedian = median(SST, na.rm = TRUE),      # sum value
+    SSTmax = max(SST, na.rm = TRUE),      # maximum valuex  
+    SSTmin = min(SST, na.rm = TRUE),      # minimum value
+  ) %>%
+  mutate(date2 = as.Date(date)) %>% 
+  mutate(year = substr(date,0,4)) %>% 
+  mutate(yrmonth = substr(date,0,7)) %>% 
+  ungroup() 
+
+PNG_month_region<-PNG_month_region %>% 
+  left_join(PNG_region_thresholds, by = "region")
+
+ggplot(PNG_month_region,aes(x=date2, y=SSTmean, color = region))+
+    geom_point(size = 1)+
+  ylim(26,31)+
+#  scale_x_date(date_breaks = "1 month", date_labels = "%m")+
+  geom_line(aes(group=region))+
+  ylab("Mean Monthly \nSea Surface Temperature")+
+  scale_x_date(breaks = date_breaks("2 year"), date_labels = "%Y")+
+  xlab("")+
+ scale_color_manual(values=c("navy","orange", "dodgerblue","cyan", "green4", "lightblue"))+
+
+  facet_wrap(~region)+
+    geom_hline(aes(yintercept = mean, linetype = "Maximum Monthly Mean (MMM)"), size= .25, color = "tomato4")+
+  geom_hline(aes(yintercept = Kleypass_threshold, linetype = "Bleaching Threshold"),
+  size= .25, color = "tomato4")+
+  labs(linetype = NULL) +
+          theme_bw()+
+   theme(axis.text.x = element_text(angle = 0, size = 8),
+         legend.key = element_blank())
+
+
+```
+
+#### SubRegion
+
+```{r}
+
+PNG_month_subregion <- PNG_SST_monthly_means %>%
+  mutate(date = substr(date, 0, 10)) %>% 
+  group_by(date,region, subregion) %>%
+  dplyr::summarize(
+    count = n(),              # number of observations
+    SSTmean = mean(SST, na.rm = TRUE),    # mean value
+    SSTmedian = median(SST, na.rm = TRUE),      # sum value
+    SSTmax = max(SST, na.rm = TRUE),      # maximum valuex  
+    SSTmin = min(SST, na.rm = TRUE),      # minimum value
+  ) %>%
+  mutate(date2 = as.Date(date)) %>% 
+  mutate(year = substr(date,0,4)) %>% 
+  mutate(yrmonth = substr(date,0,7)) %>% 
+  ungroup() #%>%   filter(year == "2024")
+
+PNG_month_subregion<-na.omit(PNG_month_subregion)
+
+
+PNG_month_subregion<-PNG_month_subregion %>% 
+  left_join(PNG_subregion_thresholds, by = "subregion")
+
+ggplot(PNG_month_subregion,aes(x=date2, y=SSTmean, color = subregion))+
+    geom_point(size = 1)+
+  ylim(29,31)+
+  geom_line(aes(group=subregion))+
+  ylab("Mean Monthly \nSea Surface Temperature")+
+  scale_x_date(breaks = date_breaks("2 year"), date_labels = "%Y")+
+  xlab("")+
+   facet_wrap(~subregion)+
+    geom_hline(aes(yintercept = mean, linetype = "Maximum Monthly Mean (MMM)"), size= .25, color = "tomato4")+
+  geom_hline(aes(yintercept = Kleypass_threshold, linetype = "Bleaching Threshold"),
+  size= .25, color = "tomato4")+
+  labs(linetype = NULL) +
+          theme_bw()+
+   theme(axis.text.x = element_text(angle =90, vjust = 0.5,size = 8),
+         legend.key = element_blank())
+```
+
+### Daily 
+
+Selecting the worse sites that showed bleaching or death from Lovongai and Manus
+
+```{r}
+lov_metric<-PNG_SST_daily_metrics %>% 
+  filter(region == "Lovongai") %>% 
+  filter(ps_site_id %in% c("PNG_2024_uvs_034","PNG_2024_uvs_035","PNG_2024_uvs_038", "PNG_2024_uvs_033", "PNG_2024_uvs_023","PNG_2024_uvs_040")) %>% 
+   mutate(date2 = as.Date(date)) %>% 
+  mutate(monthday= str_sub(date2, 6,-1)) %>% 
+  left_join(PNG_subregion_thresholds, by = "subregion")
+
+manus_metric<-PNG_SST_daily_metrics %>% 
+  filter(region == "Manus") %>% 
+  filter(ps_site_id %in% c("PNG_2024_uvs_046","PNG_2024_uvs_051","PNG_2024_uvs_052", "PNG_2024_uvs_053", "PNG_2024_uvs_058","PNG_2024_uvs_059")) %>% 
+   mutate(date2 = as.Date(date)) %>% 
+  mutate(monthday= str_sub(date2, 6,-1)) %>% 
+  left_join(PNG_subregion_thresholds, by = "subregion")
+
+```
+
+#### SST
+
+```{r}
+
+ggplot(lov_metric,aes(x=date2, y=SST, color = ps_site_id))+
+    geom_point(size = 1)+
+  ylim(26,31)+
+#  scale_x_date(date_breaks = "1 month", date_labels = "%m")+
+  geom_line(aes(group=subregion))+
+  ylab("Mean Monthly \nSea Surface Temperature")+
+ scale_color_manual(values=c("navy","orange", "thistle3","steelblue3", "tan","yellow3" ))+
+  xlab("")+
+  scale_x_date(breaks = date_breaks("1 month"), date_labels = "%m-%d")+
+  facet_wrap(~subregion)+
+    geom_hline(aes(yintercept = mean, linetype = "Maximum Monthly Mean (MMM)"), size= .25, color = "tomato4")+
+  geom_hline(aes(yintercept = Kleypass_threshold, linetype = "Bleaching Threshold"),
+  size= .25, color = "tomato4")+
+  labs(linetype = NULL) +
+          theme_bw()+
+   theme(axis.text.x = element_text(angle =90, hjust = 1, vjust = 0.5, size = 8))
+
+
+
+```
+
+#### DHW
+
+```{r}
+
+ggplot(lov_metric,aes(x=date2, y=DHW, color = ps_site_id))+
+    geom_point(size = 1)+
+  geom_line(aes(group=subregion))+
+  ylab("DHW")+
+  xlab("")+
+   scale_color_manual(values=c("navy","orange", "thistle3","steelblue3", "tan","yellow3" ))+
+  scale_x_date(breaks = date_breaks("1 month"), date_labels = "%m-%d")+
+  facet_wrap(~subregion)+
+          theme_bw()+
+   theme(axis.text.x = element_text(angle =90, hjust = 1, vjust = 0.5, size = 8))
+
+
+
+```
+
+#### Anomaly
+
+```{r}
+
+ggplot(lov_metric,aes(x=date2, y=Anomaly, color = ps_site_id))+
+    geom_point(size = 1)+
+  geom_line(aes(group=subregion))+
+  ylab("Temperature Anomalies")+
+  xlab("")+
+ scale_color_manual(values=c("navy","orange", "dodgerblue","cyan", "magenta","yellow3" ))+
+  scale_x_date(breaks = date_breaks("1 month"), date_labels = "%m")+
+  facet_wrap(~subregion)+
+          theme_bw()+
+   theme(axis.text.x = element_text(angle = 0, size = 8),
+         legend.key = element_blank())
+
+
+
+```
+
+#### Bleaching Alert Level
+
+```{r}
+
+ggplot(manus_metric,aes(x=date2, y=BAA, color = ps_site_id))+
+    geom_point(size = 1)+
+  geom_line(aes(group=subregion))+
+  ylab("Bleaching Alert Level")+
+  xlab("")+
+ scale_color_manual(values=c("navy","orange", "thistle3","steelblue3", "tan","yellow3" ))+
+  scale_x_date(breaks = date_breaks("1 month"), date_labels = "%m-%d")+
+  facet_wrap(~subregion)+
+          theme_bw()+
+   theme(axis.text.x = element_text(angle =90, hjust = 1, vjust = 0.5, size = 8))
+
+
+
+```
+
+#### HotSpot
+
+```{r}
+
+ggplot(lov_metric,aes(x=date2, y=HotSpot, color = ps_site_id))+
+    geom_point(size = 1)+
+  geom_line(aes(group=subregion))+
+  ylab("HotSpot")+
+  xlab("")+
+ scale_color_manual(values=c("navy","orange", "dodgerblue","cyan", "magenta","yellow3" ))+
+  scale_x_date(breaks = date_breaks("1 month"), date_labels = "%m-%d")+
+  facet_wrap(~subregion)+
+          theme_bw()+
+   theme(axis.text.x = element_text(angle =90, hjust = 1, vjust = 0.5, size = 8))
+
+
+```
