@@ -38,7 +38,7 @@ for (pk in list.of.packages) {
 
 ## Data Setup
 
-Loading the RData file that has the SST time series data of the mean monthly values for Solomons for each site from 2014-2025 along with the maximum monthly mean (MMM) values by region and subregion which were calculated from the Coral Reef Watch (CRW) climatological range of 1985-2012.
+Loading the RData file that has the SST time series data of the mean monthly values for PNG for each site from 2014-2025 along with the maximum monthly mean (MMM) values by region and subregion which were calculated from the Coral Reef Watch (CRW) climatological range of 1985-2012.
 
 ```{r}
 
@@ -138,7 +138,7 @@ ggplot(PNG_month_subregion,aes(x=date2, y=SSTmean, color = subregion))+
          legend.key = element_blank())
 ```
 
-### Daily 
+### Daily
 
 Selecting the worse sites that showed bleaching or death from Lovongai and Manus
 
