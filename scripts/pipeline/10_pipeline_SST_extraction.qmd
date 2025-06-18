@@ -97,7 +97,7 @@ PNG_SST_monthly_means = PNG_SST_monthly_means[-1, ]
 
 # Rename columns
 # You know your first three columns are data, lat, and lon from the loop. the date is the month/year and the lat_data and long data represent the closest 5km pixel where the data was extracted. 
-names(PNG_SST_monthly_means) <- c('date', 'lat_data', 'lon_data', 'SST', 'ps_site_id', 'region','subregion', 'habitat','exposure')
+names(PNG_SST_monthly_means) <- c('date', 'lat_data', 'lon_data', 'SST', 'ps_site_id', 'region','subregion', 'habitat','exposure', 'latitude','longitude')
 
 
 write.csv(PNG_SST_monthly_means, "PNG_SST_monthly_means_2010_2025.csv", row.names = F)
@@ -106,7 +106,7 @@ write.csv(PNG_SST_monthly_means, "PNG_SST_monthly_means_2010_2025.csv", row.name
 
 ```
 
-# Daily  Metrics
+# Daily Metrics
 
 To look more specifically at locations around the time of the expedition, extracting daily measurements within one year of the expedition. This doens't just include the daily SST values, but the range of bleaching products that CRW puts out that includes an alert, degree heating weeks, anomalies, and hot spots. This link provides the specifics for each of these metrics: <https://coralreefwatch.noaa.gov/product/5km/methodology.php>
 

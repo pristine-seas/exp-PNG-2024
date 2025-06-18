@@ -14,14 +14,13 @@ editor_options:
 
 rm(list = ls())
 #options(repos="https://cran.rstudio.com" )
-library(tidyverse)
-library(stringi)
-library(stringr)
-library(EcolUtils)
-library(data.table)
-library(readxl)
-library(treemapify)
-library(ggVennDiagram)
+library(tidyverse) # data wrangling
+library(stringi) # data manipulation
+library(stringr) # data manipulation
+library(readxl) # reading in excel files
+library(treemapify) # tree map plots
+library(ggVennDiagram) # venn diagrams
+library(lessR) # doughnut plots
 
 setwd("~/Documents/PS eDNA/PNG_2024/")
 ```
@@ -87,13 +86,15 @@ PNG_benthos_health<-cover_by_station_and_taxa %>%
     group_by(ps_station_id, functional_group2)%>%
   dplyr::summarise(pct_cover=sum(pct_cover))%>%
   pivot_wider(id_cols = c("ps_station_id"), names_from = functional_group2, values_from = pct_cover, values_fill = 0) %>%
+    mutate(algae = rowSums(across(c("erect algae","turf")))) %>% 
+    mutate(live_coral = `hard coral - live`) %>%
+  mutate(`hard coral - live` = NULL) %>% 
+  left_join(stations_uvs, by = "ps_station_id") %>% 
   data.frame ()
 
-PNG_benthos_health$algae<- PNG_benthos_health$erect.algae+PNG_benthos_health$turf
 
 PNG_benthos_health2<-PNG_benthos_health %>%
-  select(ps_station_id, cca, hard.coral...live, algae, cyanobacteria) %>% 
-  mutate(live_coral = hard.coral...live) %>%
+  select(ps_station_id, cca, live_coral, algae, cyanobacteria) %>% 
   mutate(., CCA_score = with(., case_when(
     (cca >= 20 ) ~ "Excellent",
     (cca < 20 & cca >= 10) ~ "Good",
@@ -151,17 +152,25 @@ mutate(., Coral_score = with(., case_when(
     (rank_value < 60) ~ "Very Poor"))) %>%
   left_join(stations_uvs[,c("ps_station_id","ps_site_id","region","subregion","locality","habitat","exposure")], by = "ps_station_id")
 
+
+```
+
+Calculating percentages of poor and good sites across regions.
+
+```{r}
 # Getting percentage of combined Poor and VeryPoor
 poor_region_sites<-PNG_benthos_health2 %>%
   group_by(region) %>%
   reframe(rank = rank_value<70) %>%
   group_by(region, rank) %>%
   tally() %>%
+  mutate(rank = replace(rank, rank == "TRUE","Y")) %>% 
+    mutate(rank = replace(rank, rank == "FALSE","N"))  %>% 
   pivot_wider(id_cols = region, names_from = rank, values_from = n) %>%
-  rename(other = "FALSE", poor = "TRUE") %>%
-  data_frame() %>%
+  mutate(other = N, poor = Y) %>% 
+  select(-N, -Y) %>% 
  mutate(total = other + poor)%>%
-  mutate(poor_per = (poor/total)*100)
+  mutate(poor_percentage = (poor/total)*100)
   
   
 # Getting percentage of combined Good and Excellent categories
@@ -170,11 +179,13 @@ good_region_sites<-PNG_benthos_health2 %>%
   reframe(rank = rank_value>80) %>%
   group_by(region, rank) %>%
   tally() %>%
+   mutate(rank = replace(rank, rank == "TRUE","Y")) %>% 
+    mutate(rank = replace(rank, rank == "FALSE","N"))  %>% 
   pivot_wider(id_cols = region, names_from = rank, values_from = n) %>%
-  rename(other = "FALSE", good = "TRUE") %>%
-  data_frame() %>%
+   mutate(other = N, good = Y) %>% 
+  select(-N, -Y) %>% 
  mutate(total = other + good)%>%
-  mutate(good_per = (good/total)*100)
+  mutate(good_percentage = (good/total)*100)
 
 # exposure
 PNG_benthos_health2 %>% 
@@ -182,6 +193,1012 @@ PNG_benthos_health2 %>%
   tally()
 
 
+```
+
+#### By location for outreach products
+
+For these, we are creating doughnut plots that have equal proportions of the 4 health categories (cca, algae, cyanobacteria, coral) but colored based on condition (excellent, good, fair, poor, very poor). These are done based on promised community engagements within Lovongai and Murat. Manus and Western will be pooled.
+
+In order to make the equal parts, all doughnuts will link the below code for graphing purposes
+
+```{r}
+
+
+cover= c("cca","live_coral", "algae", "cyanobacteria")
+percent = c(25,25,25,25)
+dough_universal<-data.frame(cover, percent)
+
+```
+
+##### Tingwon
+
+```{r}
+
+ting_health<-PNG_benthos_health %>%
+  filter(locality == "Tingwon") %>% 
+   select(ps_station_id, cca,live_coral, algae, cyanobacteria, depth_strata) %>% 
+    group_by(depth_strata) %>% 
+ #select(cca,live_coral, algae, cyanobacteria) %>% 
+  summarize(live_coral = mean(live_coral), cyanobacteria = mean(cyanobacteria), cca=mean(cca), algae= mean(algae)) %>% 
+    mutate(., cca_color = with(., case_when(
+    (cca >= 20 ) ~ "darkgreen",
+    (cca < 20 & cca >= 10) ~ "palegreen3",
+    (cca < 10 & cca >= 5) ~ "yellow",
+    (cca < 5 & cca >= 2) ~ "orange",
+    (cca < 2) ~ "orangered4"))) %>%
+mutate(., coral_color = with(., case_when(
+  (live_coral >= 40 ) ~ "darkgreen",
+  (live_coral < 40 & live_coral >= 30) ~ "palegreen3",
+  (live_coral < 30 & live_coral >= 20) ~ "yellow",
+  (live_coral < 20 & live_coral >= 10) ~ "orange",
+  (live_coral < 10) ~ "orangered4"))) %>%
+  mutate(., algae_color = with(., case_when(
+    (algae < 5 ) ~ "darkgreen",
+    (algae <10  & algae >= 5) ~ "palegreen3",
+    (algae < 20 & algae >= 10) ~ "yellow",
+    (algae < 30 & algae >= 20) ~ "orange",
+    (algae >= 30) ~ "orangered4"))) %>%
+  mutate(., cyanobacteria_color = with(., case_when(
+    (cyanobacteria < 2 ) ~ "darkgreen",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "palegreen3",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "yellow",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "orange",
+    (cyanobacteria >= 15) ~ "orangered4"))) %>% 
+  mutate(., cca_score_value = as.numeric(with(., case_when(
+    (cca >= 20 ) ~ "95",
+    (cca < 20 & cca >= 10) ~ "85",
+    (cca < 10 & cca >= 5) ~ "75",
+    (cca < 5 & cca >= 2) ~ "65",
+    (cca < 2) ~ "50")))) %>%
+  mutate(., coral_score_value = as.numeric(with(., case_when(
+    (live_coral >= 40 ) ~ "95",
+    (live_coral < 40 & live_coral >= 30) ~ "85",
+    (live_coral < 30 & live_coral >= 20) ~ "75",
+    (live_coral < 20 & live_coral >= 10) ~ "65",
+    (live_coral < 10) ~ "50")))) %>%
+  mutate(., algae_score_value = as.numeric(with(., case_when(
+    (algae < 5 ) ~ "95",
+    (algae <10  & algae >= 5) ~ "85",
+    (algae < 20 & algae >= 10) ~ "75",
+    (algae < 30 & algae >= 20) ~ "65",
+    (algae >= 30) ~ "50")))) %>%
+  mutate(., cyano_score_value = as.numeric(with(., case_when(
+    (cyanobacteria < 2 ) ~ "95",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "85",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "75",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "65",
+    (cyanobacteria >= 15) ~ "50"))))
+
+
+ting_health_score<-ting_health %>% 
+  select(cca_score_value, coral_score_value, algae_score_value,cyano_score_value) %>% 
+  pivot_longer(cols = c("cca_score_value","coral_score_value", "algae_score_value", "cyano_score_value"), names_to = "value", values_to ="score_value") 
+
+ting_health_color<-ting_health %>% 
+  select(cca_color, coral_color, algae_color,cyanobacteria_color) %>% 
+  pivot_longer(cols = c("cca_color","coral_color", "algae_color", "cyanobacteria_color"), names_to = "cover_color", values_to ="color") 
+
+
+ting_health_value<-ting_health %>% 
+  select(depth_strata, cca, live_coral, algae,cyanobacteria) %>% 
+  pivot_longer(cols = c("cca","live_coral", "algae", "cyanobacteria"), names_to = "cover", values_to ="mean") %>% 
+  left_join(dough_universal, by = "cover") %>% 
+  mutate(color = ting_health_color$color) %>% 
+  mutate(score_value = ting_health_score$score_value)
+  
+shallow<-  ting_health_value %>%
+    filter(depth_strata == "shallow") %>% 
+  mutate(rank = with(., case_when(
+    (color == "darkgreen") ~ "Excellent",
+    (color == "palegreen3") ~ "Good",
+    (color == "yellow") ~ "Fair",
+    (color == "orange") ~ "Poor",
+    (color == "orangered4") ~ "Very Poor"))) %>% 
+  arrange(cover)
+
+mean(shallow$score_value)
+
+pdf(file = "Tingwon_dounut.pdf",width =5, height = 5 )
+PieChart(cover, data = shallow,
+         fill = shallow$color, color = "black",
+         main="Tingwon", hole=.4,
+         values_size = 0.09)
+    
+dev.off()
+ 
+  
+  
+```
+
+##### Tsolik
+
+```{r}
+
+tsol_health<-PNG_benthos_health %>%
+  filter(locality == "Tsolik") %>% 
+   select(ps_station_id, cca,live_coral, algae, cyanobacteria, depth_strata) %>% 
+    group_by(depth_strata) %>% 
+ #select(cca,live_coral, algae, cyanobacteria) %>% 
+  summarize(live_coral = mean(live_coral), cyanobacteria = mean(cyanobacteria), cca=mean(cca), algae= mean(algae)) %>% 
+    mutate(., cca_color = with(., case_when(
+    (cca >= 20 ) ~ "darkgreen",
+    (cca < 20 & cca >= 10) ~ "palegreen3",
+    (cca < 10 & cca >= 5) ~ "yellow",
+    (cca < 5 & cca >= 2) ~ "orange",
+    (cca < 2) ~ "darkred"))) %>%
+mutate(., coral_color = with(., case_when(
+  (live_coral >= 40 ) ~ "darkgreen",
+  (live_coral < 40 & live_coral >= 30) ~ "palegreen3",
+  (live_coral < 30 & live_coral >= 20) ~ "yellow",
+  (live_coral < 20 & live_coral >= 10) ~ "orange",
+  (live_coral < 10) ~ "darkred"))) %>%
+  mutate(., algae_color = with(., case_when(
+    (algae < 5 ) ~ "darkgreen",
+    (algae <10  & algae >= 5) ~ "palegreen3",
+    (algae < 20 & algae >= 10) ~ "yellow",
+    (algae < 30 & algae >= 20) ~ "orange",
+    (algae >= 30) ~ "darkred"))) %>%
+  mutate(., cyanobacteria_color = with(., case_when(
+    (cyanobacteria < 2 ) ~ "darkgreen",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "palegreen3",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "yellow",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "orange",
+    (cyanobacteria >= 15) ~ "darkred"))) %>% 
+  mutate(., cca_score_value = as.numeric(with(., case_when(
+    (cca >= 20 ) ~ "95",
+    (cca < 20 & cca >= 10) ~ "85",
+    (cca < 10 & cca >= 5) ~ "75",
+    (cca < 5 & cca >= 2) ~ "65",
+    (cca < 2) ~ "50")))) %>%
+  mutate(., coral_score_value = as.numeric(with(., case_when(
+    (live_coral >= 40 ) ~ "95",
+    (live_coral < 40 & live_coral >= 30) ~ "85",
+    (live_coral < 30 & live_coral >= 20) ~ "75",
+    (live_coral < 20 & live_coral >= 10) ~ "65",
+    (live_coral < 10) ~ "50")))) %>%
+  mutate(., algae_score_value = as.numeric(with(., case_when(
+    (algae < 5 ) ~ "95",
+    (algae <10  & algae >= 5) ~ "85",
+    (algae < 20 & algae >= 10) ~ "75",
+    (algae < 30 & algae >= 20) ~ "65",
+    (algae >= 30) ~ "50")))) %>%
+  mutate(., cyano_score_value = as.numeric(with(., case_when(
+    (cyanobacteria < 2 ) ~ "95",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "85",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "75",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "65",
+    (cyanobacteria >= 15) ~ "50"))))
+
+
+tsol_health_score<-tsol_health %>% 
+  select(cca_score_value, coral_score_value, algae_score_value,cyano_score_value) %>% 
+  pivot_longer(cols = c("cca_score_value","coral_score_value", "algae_score_value", "cyano_score_value"), names_to = "value", values_to ="score_value") 
+
+tsol_health_color<-tsol_health %>% 
+  select(cca_color, coral_color, algae_color,cyanobacteria_color) %>% 
+  pivot_longer(cols = c("cca_color","coral_color", "algae_color", "cyanobacteria_color"), names_to = "cover_color", values_to ="color") 
+
+
+tsol_health_value<-tsol_health %>% 
+  select(depth_strata, cca, live_coral, algae,cyanobacteria) %>% 
+  pivot_longer(cols = c("cca","live_coral", "algae", "cyanobacteria"), names_to = "cover", values_to ="mean") %>% 
+  left_join(dough_universal, by = "cover") %>% 
+  mutate(color = tsol_health_color$color) %>% 
+  mutate(score_value = tsol_health_score$score_value)
+  
+shallow<-  tsol_health_value %>%
+    filter(depth_strata == "shallow") %>% 
+  mutate(rank = with(., case_when(
+    (color == "darkgreen") ~ "Excellent",
+    (color == "palegreen3") ~ "Good",
+    (color == "yellow") ~ "Fair",
+    (color == "orange") ~ "Poor",
+    (color == "darkred") ~ "Very Poor"))) %>%   arrange(cover)
+
+mean(shallow$score_value)
+
+pdf(file = "tsolik_dounut.pdf",width =5, height = 5 )
+PieChart(cover, data = shallow,
+         fill = shallow$color, color = "black",
+         main="Tsolik", hole=.4,
+         values_size = 0.09)
+    
+ dev.off()
+ 
+  
+  
+```
+
+##### Au
+
+```{r}
+
+au_health<-PNG_benthos_health %>%
+  filter(locality == "Au") %>% 
+   select(ps_station_id, cca,live_coral, algae, cyanobacteria, depth_strata) %>% 
+    group_by(depth_strata) %>% 
+ #select(cca,live_coral, algae, cyanobacteria) %>% 
+  summarize(live_coral = mean(live_coral), cyanobacteria = mean(cyanobacteria), cca=mean(cca), algae= mean(algae)) %>% 
+    mutate(., cca_color = with(., case_when(
+    (cca >= 20 ) ~ "darkgreen",
+    (cca < 20 & cca >= 10) ~ "palegreen3",
+    (cca < 10 & cca >= 5) ~ "yellow",
+    (cca < 5 & cca >= 2) ~ "orange",
+    (cca < 2) ~ "darkred"))) %>%
+mutate(., coral_color = with(., case_when(
+  (live_coral >= 40 ) ~ "darkgreen",
+  (live_coral < 40 & live_coral >= 30) ~ "palegreen3",
+  (live_coral < 30 & live_coral >= 20) ~ "yellow",
+  (live_coral < 20 & live_coral >= 10) ~ "orange",
+  (live_coral < 10) ~ "darkred"))) %>%
+  mutate(., algae_color = with(., case_when(
+    (algae < 5 ) ~ "darkgreen",
+    (algae <10  & algae >= 5) ~ "palegreen3",
+    (algae < 20 & algae >= 10) ~ "yellow",
+    (algae < 30 & algae >= 20) ~ "orange",
+    (algae >= 30) ~ "darkred"))) %>%
+  mutate(., cyanobacteria_color = with(., case_when(
+    (cyanobacteria < 2 ) ~ "darkgreen",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "palegreen3",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "yellow",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "orange",
+    (cyanobacteria >= 15) ~ "darkred"))) %>% 
+  mutate(., cca_score_value = as.numeric(with(., case_when(
+    (cca >= 20 ) ~ "95",
+    (cca < 20 & cca >= 10) ~ "85",
+    (cca < 10 & cca >= 5) ~ "75",
+    (cca < 5 & cca >= 2) ~ "65",
+    (cca < 2) ~ "50")))) %>%
+  mutate(., coral_score_value = as.numeric(with(., case_when(
+    (live_coral >= 40 ) ~ "95",
+    (live_coral < 40 & live_coral >= 30) ~ "85",
+    (live_coral < 30 & live_coral >= 20) ~ "75",
+    (live_coral < 20 & live_coral >= 10) ~ "65",
+    (live_coral < 10) ~ "50")))) %>%
+  mutate(., algae_score_value = as.numeric(with(., case_when(
+    (algae < 5 ) ~ "95",
+    (algae <10  & algae >= 5) ~ "85",
+    (algae < 20 & algae >= 10) ~ "75",
+    (algae < 30 & algae >= 20) ~ "65",
+    (algae >= 30) ~ "50")))) %>%
+  mutate(., cyano_score_value = as.numeric(with(., case_when(
+    (cyanobacteria < 2 ) ~ "95",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "85",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "75",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "65",
+    (cyanobacteria >= 15) ~ "50"))))
+
+
+au_health_score<-au_health %>% 
+  select(cca_score_value, coral_score_value, algae_score_value,cyano_score_value) %>% 
+  pivot_longer(cols = c("cca_score_value","coral_score_value", "algae_score_value", "cyano_score_value"), names_to = "value", values_to ="score_value") 
+
+au_health_color<-au_health %>% 
+  select(cca_color, coral_color, algae_color,cyanobacteria_color) %>% 
+  pivot_longer(cols = c("cca_color","coral_color", "algae_color", "cyanobacteria_color"), names_to = "cover_color", values_to ="color") 
+
+
+au_health_value<-au_health %>% 
+  select(depth_strata, cca, live_coral, algae,cyanobacteria) %>% 
+  pivot_longer(cols = c("cca","live_coral", "algae", "cyanobacteria"), names_to = "cover", values_to ="mean") %>% 
+  left_join(dough_universal, by = "cover") %>% 
+  mutate(color = au_health_color$color) %>% 
+  mutate(score_value = au_health_score$score_value)
+  
+shallow<-  au_health_value %>%
+    filter(depth_strata == "shallow") %>% 
+  mutate(rank = with(., case_when(
+    (color == "darkgreen") ~ "Excellent",
+    (color == "palegreen3") ~ "Good",
+    (color == "yellow") ~ "Fair",
+    (color == "orange") ~ "Poor",
+    (color == "darkred") ~ "Very Poor"))) %>%   arrange(cover)
+
+mean(shallow$score_value)
+
+pdf(file = "Au_dounut.pdf",width =5, height = 5 )
+PieChart(cover, data = shallow,
+         fill = shallow$color, color = "black",
+         main="Au", hole=.4,
+         values_size = 0.09)
+    
+ dev.off()
+ 
+  
+  
+```
+
+##### Lovonagi
+
+```{r}
+
+lov_health<-PNG_benthos_health %>%
+  filter(region == "Lovongai") %>% 
+   select(ps_station_id, cca,live_coral, algae, cyanobacteria, depth_strata) %>% 
+    group_by(depth_strata) %>% 
+ #select(cca,live_coral, algae, cyanobacteria) %>% 
+  summarize(live_coral = mean(live_coral), cyanobacteria = mean(cyanobacteria), cca=mean(cca), algae= mean(algae)) %>% 
+    mutate(., cca_color = with(., case_when(
+    (cca >= 20 ) ~ "darkgreen",
+    (cca < 20 & cca >= 10) ~ "palegreen3",
+    (cca < 10 & cca >= 5) ~ "yellow",
+    (cca < 5 & cca >= 2) ~ "orange",
+    (cca < 2) ~ "darkred"))) %>%
+mutate(., coral_color = with(., case_when(
+  (live_coral >= 40 ) ~ "darkgreen",
+  (live_coral < 40 & live_coral >= 30) ~ "palegreen3",
+  (live_coral < 30 & live_coral >= 20) ~ "yellow",
+  (live_coral < 20 & live_coral >= 10) ~ "orange",
+  (live_coral < 10) ~ "darkred"))) %>%
+  mutate(., algae_color = with(., case_when(
+    (algae < 5 ) ~ "darkgreen",
+    (algae <10  & algae >= 5) ~ "palegreen3",
+    (algae < 20 & algae >= 10) ~ "yellow",
+    (algae < 30 & algae >= 20) ~ "orange",
+    (algae >= 30) ~ "darkred"))) %>%
+  mutate(., cyanobacteria_color = with(., case_when(
+    (cyanobacteria < 2 ) ~ "darkgreen",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "palegreen3",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "yellow",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "orange",
+    (cyanobacteria >= 15) ~ "darkred"))) %>% 
+  mutate(., cca_score_value = as.numeric(with(., case_when(
+    (cca >= 20 ) ~ "95",
+    (cca < 20 & cca >= 10) ~ "85",
+    (cca < 10 & cca >= 5) ~ "75",
+    (cca < 5 & cca >= 2) ~ "65",
+    (cca < 2) ~ "50")))) %>%
+  mutate(., coral_score_value = as.numeric(with(., case_when(
+    (live_coral >= 40 ) ~ "95",
+    (live_coral < 40 & live_coral >= 30) ~ "85",
+    (live_coral < 30 & live_coral >= 20) ~ "75",
+    (live_coral < 20 & live_coral >= 10) ~ "65",
+    (live_coral < 10) ~ "50")))) %>%
+  mutate(., algae_score_value = as.numeric(with(., case_when(
+    (algae < 5 ) ~ "95",
+    (algae <10  & algae >= 5) ~ "85",
+    (algae < 20 & algae >= 10) ~ "75",
+    (algae < 30 & algae >= 20) ~ "65",
+    (algae >= 30) ~ "50")))) %>%
+  mutate(., cyano_score_value = as.numeric(with(., case_when(
+    (cyanobacteria < 2 ) ~ "95",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "85",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "75",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "65",
+    (cyanobacteria >= 15) ~ "50"))))
+
+
+lov_health_score<-lov_health %>% 
+  select(cca_score_value, coral_score_value, algae_score_value,cyano_score_value) %>% 
+  pivot_longer(cols = c("cca_score_value","coral_score_value", "algae_score_value", "cyano_score_value"), names_to = "value", values_to ="score_value") 
+
+lov_health_color<-lov_health %>% 
+  select(cca_color, coral_color, algae_color,cyanobacteria_color) %>% 
+  pivot_longer(cols = c("cca_color","coral_color", "algae_color", "cyanobacteria_color"), names_to = "cover_color", values_to ="color") 
+
+
+lov_health_value<-lov_health %>% 
+  select(depth_strata, cca, live_coral, algae,cyanobacteria) %>% 
+  pivot_longer(cols = c("cca","live_coral", "algae", "cyanobacteria"), names_to = "cover", values_to ="mean") %>% 
+  left_join(dough_universal, by = "cover") %>% 
+  mutate(color = lov_health_color$color) %>% 
+  mutate(score_value = lov_health_score$score_value)
+  
+shallow<-  lov_health_value %>%
+    filter(depth_strata == "shallow") %>% 
+  mutate(rank = with(., case_when(
+    (color == "darkgreen") ~ "Excellent",
+    (color == "palegreen3") ~ "Good",
+    (color == "yellow") ~ "Fair",
+    (color == "orange") ~ "Poor",
+    (color == "darkred") ~ "Very Poor"))) %>%   arrange(cover)
+
+mean(shallow$score_value)
+
+pdf(file = "Lovongai_dounut.pdf",width =5, height = 5 )
+PieChart(cover, data = shallow,
+         fill = shallow$color, color = "black",
+         main="Lovongai", hole=.4,
+         values_size = 0.09)
+    
+dev.off()
+ 
+  
+  
+```
+
+##### Emirau
+
+```{r}
+
+emi_health<-PNG_benthos_health %>%
+  filter(subregion == "Emirau") %>% 
+   select(ps_station_id, cca,live_coral, algae, cyanobacteria, depth_strata) %>% 
+    group_by(depth_strata) %>% 
+ #select(cca,live_coral, algae, cyanobacteria) %>% 
+  summarize(live_coral = mean(live_coral), cyanobacteria = mean(cyanobacteria), cca=mean(cca), algae= mean(algae)) %>% 
+    mutate(., cca_color = with(., case_when(
+    (cca >= 20 ) ~ "darkgreen",
+    (cca < 20 & cca >= 10) ~ "palegreen3",
+    (cca < 10 & cca >= 5) ~ "yellow",
+    (cca < 5 & cca >= 2) ~ "orange",
+    (cca < 2) ~ "darkred"))) %>%
+mutate(., coral_color = with(., case_when(
+  (live_coral >= 40 ) ~ "darkgreen",
+  (live_coral < 40 & live_coral >= 30) ~ "palegreen3",
+  (live_coral < 30 & live_coral >= 20) ~ "yellow",
+  (live_coral < 20 & live_coral >= 10) ~ "orange",
+  (live_coral < 10) ~ "darkred"))) %>%
+  mutate(., algae_color = with(., case_when(
+    (algae < 5 ) ~ "darkgreen",
+    (algae <10  & algae >= 5) ~ "palegreen3",
+    (algae < 20 & algae >= 10) ~ "yellow",
+    (algae < 30 & algae >= 20) ~ "orange",
+    (algae >= 30) ~ "darkred"))) %>%
+  mutate(., cyanobacteria_color = with(., case_when(
+    (cyanobacteria < 2 ) ~ "darkgreen",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "palegreen3",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "yellow",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "orange",
+    (cyanobacteria >= 15) ~ "darkred"))) %>% 
+  mutate(., cca_score_value = as.numeric(with(., case_when(
+    (cca >= 20 ) ~ "95",
+    (cca < 20 & cca >= 10) ~ "85",
+    (cca < 10 & cca >= 5) ~ "75",
+    (cca < 5 & cca >= 2) ~ "65",
+    (cca < 2) ~ "50")))) %>%
+  mutate(., coral_score_value = as.numeric(with(., case_when(
+    (live_coral >= 40 ) ~ "95",
+    (live_coral < 40 & live_coral >= 30) ~ "85",
+    (live_coral < 30 & live_coral >= 20) ~ "75",
+    (live_coral < 20 & live_coral >= 10) ~ "65",
+    (live_coral < 10) ~ "50")))) %>%
+  mutate(., algae_score_value = as.numeric(with(., case_when(
+    (algae < 5 ) ~ "95",
+    (algae <10  & algae >= 5) ~ "85",
+    (algae < 20 & algae >= 10) ~ "75",
+    (algae < 30 & algae >= 20) ~ "65",
+    (algae >= 30) ~ "50")))) %>%
+  mutate(., cyano_score_value = as.numeric(with(., case_when(
+    (cyanobacteria < 2 ) ~ "95",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "85",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "75",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "65",
+    (cyanobacteria >= 15) ~ "50"))))
+
+
+emi_health_score<-emi_health %>% 
+  select(cca_score_value, coral_score_value, algae_score_value,cyano_score_value) %>% 
+  pivot_longer(cols = c("cca_score_value","coral_score_value", "algae_score_value", "cyano_score_value"), names_to = "value", values_to ="score_value") 
+
+emi_health_color<-emi_health %>% 
+  select(cca_color, coral_color, algae_color,cyanobacteria_color) %>% 
+  pivot_longer(cols = c("cca_color","coral_color", "algae_color", "cyanobacteria_color"), names_to = "cover_color", values_to ="color") 
+
+
+emi_health_value<-emi_health %>% 
+  select(depth_strata, cca, live_coral, algae,cyanobacteria) %>% 
+  pivot_longer(cols = c("cca","live_coral", "algae", "cyanobacteria"), names_to = "cover", values_to ="mean") %>% 
+  left_join(dough_universal, by = "cover") %>% 
+  mutate(color = emi_health_color$color) %>% 
+  mutate(score_value = emi_health_score$score_value)
+  
+shallow<-  emi_health_value %>%
+    filter(depth_strata == "shallow") %>% 
+  mutate(rank = with(., case_when(
+    (color == "darkgreen") ~ "Excellent",
+    (color == "palegreen3") ~ "Good",
+    (color == "yellow") ~ "Fair",
+    (color == "orange") ~ "Poor",
+    (color == "darkred") ~ "Very Poor"))) %>%   arrange(cover)
+
+mean(shallow$score_value)
+
+pdf(file = "Emirau_dounut.pdf",width =5, height = 5 )
+PieChart(cover, data = shallow,
+         fill = shallow$color, color = "black",
+         main="Emirau", hole=.4,
+         values_size = 0.09)
+    
+dev.off()
+ 
+  
+  
+```
+
+##### Tench
+
+```{r}
+
+ten_health<-PNG_benthos_health %>%
+  filter(subregion == "Tench") %>% 
+   select(ps_station_id, cca,live_coral, algae, cyanobacteria, depth_strata) %>% 
+    group_by(depth_strata) %>% 
+ #select(cca,live_coral, algae, cyanobacteria) %>% 
+  summarize(live_coral = mean(live_coral), cyanobacteria = mean(cyanobacteria), cca=mean(cca), algae= mean(algae)) %>% 
+    mutate(., cca_color = with(., case_when(
+    (cca >= 20 ) ~ "darkgreen",
+    (cca < 20 & cca >= 10) ~ "palegreen3",
+    (cca < 10 & cca >= 5) ~ "yellow",
+    (cca < 5 & cca >= 2) ~ "orange",
+    (cca < 2) ~ "darkred"))) %>%
+mutate(., coral_color = with(., case_when(
+  (live_coral >= 40 ) ~ "darkgreen",
+  (live_coral < 40 & live_coral >= 30) ~ "palegreen3",
+  (live_coral < 30 & live_coral >= 20) ~ "yellow",
+  (live_coral < 20 & live_coral >= 10) ~ "orange",
+  (live_coral < 10) ~ "darkred"))) %>%
+  mutate(., algae_color = with(., case_when(
+    (algae < 5 ) ~ "darkgreen",
+    (algae <10  & algae >= 5) ~ "palegreen3",
+    (algae < 20 & algae >= 10) ~ "yellow",
+    (algae < 30 & algae >= 20) ~ "orange",
+    (algae >= 30) ~ "darkred"))) %>%
+  mutate(., cyanobacteria_color = with(., case_when(
+    (cyanobacteria < 2 ) ~ "darkgreen",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "palegreen3",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "yellow",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "orange",
+    (cyanobacteria >= 15) ~ "darkred"))) %>% 
+  mutate(., cca_score_value = as.numeric(with(., case_when(
+    (cca >= 20 ) ~ "95",
+    (cca < 20 & cca >= 10) ~ "85",
+    (cca < 10 & cca >= 5) ~ "75",
+    (cca < 5 & cca >= 2) ~ "65",
+    (cca < 2) ~ "50")))) %>%
+  mutate(., coral_score_value = as.numeric(with(., case_when(
+    (live_coral >= 40 ) ~ "95",
+    (live_coral < 40 & live_coral >= 30) ~ "85",
+    (live_coral < 30 & live_coral >= 20) ~ "75",
+    (live_coral < 20 & live_coral >= 10) ~ "65",
+    (live_coral < 10) ~ "50")))) %>%
+  mutate(., algae_score_value = as.numeric(with(., case_when(
+    (algae < 5 ) ~ "95",
+    (algae <10  & algae >= 5) ~ "85",
+    (algae < 20 & algae >= 10) ~ "75",
+    (algae < 30 & algae >= 20) ~ "65",
+    (algae >= 30) ~ "50")))) %>%
+  mutate(., cyano_score_value = as.numeric(with(., case_when(
+    (cyanobacteria < 2 ) ~ "95",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "85",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "75",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "65",
+    (cyanobacteria >= 15) ~ "50"))))
+
+
+ten_health_score<-ten_health %>% 
+  select(cca_score_value, coral_score_value, algae_score_value,cyano_score_value) %>% 
+  pivot_longer(cols = c("cca_score_value","coral_score_value", "algae_score_value", "cyano_score_value"), names_to = "value", values_to ="score_value") 
+
+ten_health_color<-ten_health %>% 
+  select(cca_color, coral_color, algae_color,cyanobacteria_color) %>% 
+  pivot_longer(cols = c("cca_color","coral_color", "algae_color", "cyanobacteria_color"), names_to = "cover_color", values_to ="color") 
+
+
+ten_health_value<-ten_health %>% 
+  select(depth_strata, cca, live_coral, algae,cyanobacteria) %>% 
+  pivot_longer(cols = c("cca","live_coral", "algae", "cyanobacteria"), names_to = "cover", values_to ="mean") %>% 
+  left_join(dough_universal, by = "cover") %>% 
+  mutate(color = ten_health_color$color) %>% 
+  mutate(score_value = ten_health_score$score_value)
+  
+shallow<-  ten_health_value %>%
+    filter(depth_strata == "shallow") %>% 
+  mutate(rank = with(., case_when(
+    (color == "darkgreen") ~ "Excellent",
+    (color == "palegreen3") ~ "Good",
+    (color == "yellow") ~ "Fair",
+    (color == "orange") ~ "Poor",
+    (color == "darkred") ~ "Very Poor"))) %>%   arrange(cover)
+
+mean(shallow$score_value)
+
+pdf(file = "Tench_dounut.pdf",width =5, height = 5 )
+PieChart(cover, data = shallow,
+         fill = shallow$color, color = "black",
+         main="Tench", hole=.4,
+         values_size = 0.09)
+    
+ dev.off()
+ 
+  
+  
+```
+
+##### Lolieng
+
+```{r}
+
+lol_health<-PNG_benthos_health %>%
+  filter(locality == "Lolieng") %>% 
+   select(ps_station_id, cca,live_coral, algae, cyanobacteria, depth_strata) %>% 
+    group_by(depth_strata) %>% 
+ #select(cca,live_coral, algae, cyanobacteria) %>% 
+  summarize(live_coral = mean(live_coral), cyanobacteria = mean(cyanobacteria), cca=mean(cca), algae= mean(algae)) %>% 
+    mutate(., cca_color = with(., case_when(
+    (cca >= 20 ) ~ "darkgreen",
+    (cca < 20 & cca >= 10) ~ "palegreen3",
+    (cca < 10 & cca >= 5) ~ "yellow",
+    (cca < 5 & cca >= 2) ~ "orange",
+    (cca < 2) ~ "darkred"))) %>%
+mutate(., coral_color = with(., case_when(
+  (live_coral >= 40 ) ~ "darkgreen",
+  (live_coral < 40 & live_coral >= 30) ~ "palegreen3",
+  (live_coral < 30 & live_coral >= 20) ~ "yellow",
+  (live_coral < 20 & live_coral >= 10) ~ "orange",
+  (live_coral < 10) ~ "darkred"))) %>%
+  mutate(., algae_color = with(., case_when(
+    (algae < 5 ) ~ "darkgreen",
+    (algae <10  & algae >= 5) ~ "palegreen3",
+    (algae < 20 & algae >= 10) ~ "yellow",
+    (algae < 30 & algae >= 20) ~ "orange",
+    (algae >= 30) ~ "darkred"))) %>%
+  mutate(., cyanobacteria_color = with(., case_when(
+    (cyanobacteria < 2 ) ~ "darkgreen",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "palegreen3",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "yellow",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "orange",
+    (cyanobacteria >= 15) ~ "darkred"))) %>% 
+  mutate(., cca_score_value = as.numeric(with(., case_when(
+    (cca >= 20 ) ~ "95",
+    (cca < 20 & cca >= 10) ~ "85",
+    (cca < 10 & cca >= 5) ~ "75",
+    (cca < 5 & cca >= 2) ~ "65",
+    (cca < 2) ~ "50")))) %>%
+  mutate(., coral_score_value = as.numeric(with(., case_when(
+    (live_coral >= 40 ) ~ "95",
+    (live_coral < 40 & live_coral >= 30) ~ "85",
+    (live_coral < 30 & live_coral >= 20) ~ "75",
+    (live_coral < 20 & live_coral >= 10) ~ "65",
+    (live_coral < 10) ~ "50")))) %>%
+  mutate(., algae_score_value = as.numeric(with(., case_when(
+    (algae < 5 ) ~ "95",
+    (algae <10  & algae >= 5) ~ "85",
+    (algae < 20 & algae >= 10) ~ "75",
+    (algae < 30 & algae >= 20) ~ "65",
+    (algae >= 30) ~ "50")))) %>%
+  mutate(., cyano_score_value = as.numeric(with(., case_when(
+    (cyanobacteria < 2 ) ~ "95",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "85",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "75",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "65",
+    (cyanobacteria >= 15) ~ "50"))))
+
+
+lol_health_score<-lol_health %>% 
+  select(cca_score_value, coral_score_value, algae_score_value,cyano_score_value) %>% 
+  pivot_longer(cols = c("cca_score_value","coral_score_value", "algae_score_value", "cyano_score_value"), names_to = "value", values_to ="score_value") 
+
+lol_health_color<-lol_health %>% 
+  select(cca_color, coral_color, algae_color,cyanobacteria_color) %>% 
+  pivot_longer(cols = c("cca_color","coral_color", "algae_color", "cyanobacteria_color"), names_to = "cover_color", values_to ="color") 
+
+
+lol_health_value<-lol_health %>% 
+  select(depth_strata, cca, live_coral, algae,cyanobacteria) %>% 
+  pivot_longer(cols = c("cca","live_coral", "algae", "cyanobacteria"), names_to = "cover", values_to ="mean") %>% 
+  left_join(dough_universal, by = "cover") %>% 
+  mutate(color = lol_health_color$color) %>% 
+  mutate(score_value = lol_health_score$score_value)
+  
+shallow<-  lol_health_value %>%
+    filter(depth_strata == "shallow") %>% 
+  mutate(rank = with(., case_when(
+    (color == "darkgreen") ~ "Excellent",
+    (color == "palegreen3") ~ "Good",
+    (color == "yellow") ~ "Fair",
+    (color == "orange") ~ "Poor",
+    (color == "darkred") ~ "Very Poor"))) %>%   arrange(cover)
+
+mean(shallow$score_value)
+
+pdf(file = "Lolieng_dounut.pdf",width =5, height = 5 )
+PieChart(cover, data = shallow,
+         fill = shallow$color, color = "black",
+         main="Lolieng", hole=.4,
+         values_size = 0.09)
+    
+ dev.off()
+ 
+  
+  
+```
+
+##### Murat
+
+```{r}
+
+mur_health<-PNG_benthos_health %>%
+  filter(region == "Murat") %>% 
+   select(ps_station_id, cca,live_coral, algae, cyanobacteria, depth_strata) %>% 
+    group_by(depth_strata) %>% 
+ #select(cca,live_coral, algae, cyanobacteria) %>% 
+  summarize(live_coral = mean(live_coral), cyanobacteria = mean(cyanobacteria), cca=mean(cca), algae= mean(algae)) %>% 
+    mutate(., cca_color = with(., case_when(
+    (cca >= 20 ) ~ "darkgreen",
+    (cca < 20 & cca >= 10) ~ "palegreen3",
+    (cca < 10 & cca >= 5) ~ "yellow",
+    (cca < 5 & cca >= 2) ~ "orange",
+    (cca < 2) ~ "darkred"))) %>%
+mutate(., coral_color = with(., case_when(
+  (live_coral >= 40 ) ~ "darkgreen",
+  (live_coral < 40 & live_coral >= 30) ~ "palegreen3",
+  (live_coral < 30 & live_coral >= 20) ~ "yellow",
+  (live_coral < 20 & live_coral >= 10) ~ "orange",
+  (live_coral < 10) ~ "darkred"))) %>%
+  mutate(., algae_color = with(., case_when(
+    (algae < 5 ) ~ "darkgreen",
+    (algae <10  & algae >= 5) ~ "palegreen3",
+    (algae < 20 & algae >= 10) ~ "yellow",
+    (algae < 30 & algae >= 20) ~ "orange",
+    (algae >= 30) ~ "darkred"))) %>%
+  mutate(., cyanobacteria_color = with(., case_when(
+    (cyanobacteria < 2 ) ~ "darkgreen",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "palegreen3",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "yellow",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "orange",
+    (cyanobacteria >= 15) ~ "darkred"))) %>% 
+  mutate(., cca_score_value = as.numeric(with(., case_when(
+    (cca >= 20 ) ~ "95",
+    (cca < 20 & cca >= 10) ~ "85",
+    (cca < 10 & cca >= 5) ~ "75",
+    (cca < 5 & cca >= 2) ~ "65",
+    (cca < 2) ~ "50")))) %>%
+  mutate(., coral_score_value = as.numeric(with(., case_when(
+    (live_coral >= 40 ) ~ "95",
+    (live_coral < 40 & live_coral >= 30) ~ "85",
+    (live_coral < 30 & live_coral >= 20) ~ "75",
+    (live_coral < 20 & live_coral >= 10) ~ "65",
+    (live_coral < 10) ~ "50")))) %>%
+  mutate(., algae_score_value = as.numeric(with(., case_when(
+    (algae < 5 ) ~ "95",
+    (algae <10  & algae >= 5) ~ "85",
+    (algae < 20 & algae >= 10) ~ "75",
+    (algae < 30 & algae >= 20) ~ "65",
+    (algae >= 30) ~ "50")))) %>%
+  mutate(., cyano_score_value = as.numeric(with(., case_when(
+    (cyanobacteria < 2 ) ~ "95",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "85",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "75",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "65",
+    (cyanobacteria >= 15) ~ "50"))))
+
+
+mur_health_score<-mur_health %>% 
+  select(cca_score_value, coral_score_value, algae_score_value,cyano_score_value) %>% 
+  pivot_longer(cols = c("cca_score_value","coral_score_value", "algae_score_value", "cyano_score_value"), names_to = "value", values_to ="score_value") 
+
+mur_health_color<-mur_health %>% 
+  select(cca_color, coral_color, algae_color,cyanobacteria_color) %>% 
+  pivot_longer(cols = c("cca_color","coral_color", "algae_color", "cyanobacteria_color"), names_to = "cover_color", values_to ="color") 
+
+
+mur_health_value<-mur_health %>% 
+  select(depth_strata, cca, live_coral, algae,cyanobacteria) %>% 
+  pivot_longer(cols = c("cca","live_coral", "algae", "cyanobacteria"), names_to = "cover", values_to ="mean") %>% 
+  left_join(dough_universal, by = "cover") %>% 
+  mutate(color = mur_health_color$color) %>% 
+  mutate(score_value = mur_health_score$score_value)
+  
+shallow<-  mur_health_value %>%
+    filter(depth_strata == "shallow") %>% 
+  mutate(rank = with(., case_when(
+    (color == "darkgreen") ~ "Excellent",
+    (color == "palegreen3") ~ "Good",
+    (color == "yellow") ~ "Fair",
+    (color == "orange") ~ "Poor",
+    (color == "darkred") ~ "Very Poor"))) %>%   arrange(cover)
+
+mean(shallow$score_value)
+
+pdf(file = "Murat_dounut.pdf",width =5, height = 5 )
+PieChart(cover, data = shallow,
+         fill = shallow$color, color = "black",
+         main="Murat", hole=.4,
+         values_size = 0.09)
+    
+ dev.off()
+ 
+  
+  
+```
+
+##### Manus
+
+```{r}
+
+man_health<-PNG_benthos_health %>%
+  filter(region == "Manus") %>% 
+   select(ps_station_id, cca,live_coral, algae, cyanobacteria, depth_strata) %>% 
+    group_by(depth_strata) %>% 
+ #select(cca,live_coral, algae, cyanobacteria) %>% 
+  summarize(live_coral = mean(live_coral), cyanobacteria = mean(cyanobacteria), cca=mean(cca), algae= mean(algae)) %>% 
+    mutate(., cca_color = with(., case_when(
+    (cca >= 20 ) ~ "darkgreen",
+    (cca < 20 & cca >= 10) ~ "palegreen3",
+    (cca < 10 & cca >= 5) ~ "yellow",
+    (cca < 5 & cca >= 2) ~ "orange",
+    (cca < 2) ~ "darkred"))) %>%
+mutate(., coral_color = with(., case_when(
+  (live_coral >= 40 ) ~ "darkgreen",
+  (live_coral < 40 & live_coral >= 30) ~ "palegreen3",
+  (live_coral < 30 & live_coral >= 20) ~ "yellow",
+  (live_coral < 20 & live_coral >= 10) ~ "orange",
+  (live_coral < 10) ~ "darkred"))) %>%
+  mutate(., algae_color = with(., case_when(
+    (algae < 5 ) ~ "darkgreen",
+    (algae <10  & algae >= 5) ~ "palegreen3",
+    (algae < 20 & algae >= 10) ~ "yellow",
+    (algae < 30 & algae >= 20) ~ "orange",
+    (algae >= 30) ~ "darkred"))) %>%
+  mutate(., cyanobacteria_color = with(., case_when(
+    (cyanobacteria < 2 ) ~ "darkgreen",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "palegreen3",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "yellow",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "orange",
+    (cyanobacteria >= 15) ~ "darkred"))) %>% 
+  mutate(., cca_score_value = as.numeric(with(., case_when(
+    (cca >= 20 ) ~ "95",
+    (cca < 20 & cca >= 10) ~ "85",
+    (cca < 10 & cca >= 5) ~ "75",
+    (cca < 5 & cca >= 2) ~ "65",
+    (cca < 2) ~ "50")))) %>%
+  mutate(., coral_score_value = as.numeric(with(., case_when(
+    (live_coral >= 40 ) ~ "95",
+    (live_coral < 40 & live_coral >= 30) ~ "85",
+    (live_coral < 30 & live_coral >= 20) ~ "75",
+    (live_coral < 20 & live_coral >= 10) ~ "65",
+    (live_coral < 10) ~ "50")))) %>%
+  mutate(., algae_score_value = as.numeric(with(., case_when(
+    (algae < 5 ) ~ "95",
+    (algae <10  & algae >= 5) ~ "85",
+    (algae < 20 & algae >= 10) ~ "75",
+    (algae < 30 & algae >= 20) ~ "65",
+    (algae >= 30) ~ "50")))) %>%
+  mutate(., cyano_score_value = as.numeric(with(., case_when(
+    (cyanobacteria < 2 ) ~ "95",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "85",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "75",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "65",
+    (cyanobacteria >= 15) ~ "50"))))
+
+
+man_health_score<-man_health %>% 
+  select(cca_score_value, coral_score_value, algae_score_value,cyano_score_value) %>% 
+  pivot_longer(cols = c("cca_score_value","coral_score_value", "algae_score_value", "cyano_score_value"), names_to = "value", values_to ="score_value") 
+
+man_health_color<-man_health %>% 
+  select(cca_color, coral_color, algae_color,cyanobacteria_color) %>% 
+  pivot_longer(cols = c("cca_color","coral_color", "algae_color", "cyanobacteria_color"), names_to = "cover_color", values_to ="color") 
+
+
+man_health_value<-man_health %>% 
+  select(depth_strata, cca, live_coral, algae,cyanobacteria) %>% 
+  pivot_longer(cols = c("cca","live_coral", "algae", "cyanobacteria"), names_to = "cover", values_to ="mean") %>% 
+  left_join(dough_universal, by = "cover") %>% 
+  mutate(color = man_health_color$color) %>% 
+  mutate(score_value = man_health_score$score_value)
+  
+shallow<-  man_health_value %>%
+    filter(depth_strata == "shallow") %>% 
+  mutate(rank = with(., case_when(
+    (color == "darkgreen") ~ "Excellent",
+    (color == "palegreen3") ~ "Good",
+    (color == "yellow") ~ "Fair",
+    (color == "orange") ~ "Poor",
+    (color == "darkred") ~ "Very Poor"))) %>%   arrange(cover)
+
+mean(shallow$score_value)
+
+pdf(file = "Manus_dounut.pdf",width =5, height = 5 )
+PieChart(cover, data = shallow,
+         fill = shallow$color, color = "black",
+         main="Manus", hole=.4,
+         values_size = 0.09)
+    
+ dev.off()
+ 
+  
+  
+```
+
+##### Western Islands
+
+```{r}
+
+west_health<-PNG_benthos_health %>%
+  filter(region == "Western Islands") %>% 
+   select(ps_station_id, cca,live_coral, algae, cyanobacteria, depth_strata) %>% 
+    group_by(depth_strata) %>% 
+ #select(cca,live_coral, algae, cyanobacteria) %>% 
+  summarize(live_coral = mean(live_coral), cyanobacteria = mean(cyanobacteria), cca=mean(cca), algae= mean(algae)) %>% 
+    mutate(., cca_color = with(., case_when(
+    (cca >= 20 ) ~ "darkgreen",
+    (cca < 20 & cca >= 10) ~ "palegreen3",
+    (cca < 10 & cca >= 5) ~ "yellow",
+    (cca < 5 & cca >= 2) ~ "orange",
+    (cca < 2) ~ "darkred"))) %>%
+mutate(., coral_color = with(., case_when(
+  (live_coral >= 40 ) ~ "darkgreen",
+  (live_coral < 40 & live_coral >= 30) ~ "palegreen3",
+  (live_coral < 30 & live_coral >= 20) ~ "yellow",
+  (live_coral < 20 & live_coral >= 10) ~ "orange",
+  (live_coral < 10) ~ "darkred"))) %>%
+  mutate(., algae_color = with(., case_when(
+    (algae < 5 ) ~ "darkgreen",
+    (algae <10  & algae >= 5) ~ "palegreen3",
+    (algae < 20 & algae >= 10) ~ "yellow",
+    (algae < 30 & algae >= 20) ~ "orange",
+    (algae >= 30) ~ "darkred"))) %>%
+  mutate(., cyanobacteria_color = with(., case_when(
+    (cyanobacteria < 2 ) ~ "darkgreen",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "palegreen3",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "yellow",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "orange",
+    (cyanobacteria >= 15) ~ "darkred"))) %>% 
+  mutate(., cca_score_value = as.numeric(with(., case_when(
+    (cca >= 20 ) ~ "95",
+    (cca < 20 & cca >= 10) ~ "85",
+    (cca < 10 & cca >= 5) ~ "75",
+    (cca < 5 & cca >= 2) ~ "65",
+    (cca < 2) ~ "50")))) %>%
+  mutate(., coral_score_value = as.numeric(with(., case_when(
+    (live_coral >= 40 ) ~ "95",
+    (live_coral < 40 & live_coral >= 30) ~ "85",
+    (live_coral < 30 & live_coral >= 20) ~ "75",
+    (live_coral < 20 & live_coral >= 10) ~ "65",
+    (live_coral < 10) ~ "50")))) %>%
+  mutate(., algae_score_value = as.numeric(with(., case_when(
+    (algae < 5 ) ~ "95",
+    (algae <10  & algae >= 5) ~ "85",
+    (algae < 20 & algae >= 10) ~ "75",
+    (algae < 30 & algae >= 20) ~ "65",
+    (algae >= 30) ~ "50")))) %>%
+  mutate(., cyano_score_value = as.numeric(with(., case_when(
+    (cyanobacteria < 2 ) ~ "95",
+    (cyanobacteria <5& cyanobacteria >= 2) ~ "85",
+    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "75",
+    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "65",
+    (cyanobacteria >= 15) ~ "50"))))
+
+
+west_health_score<-west_health %>% 
+  select(cca_score_value, coral_score_value, algae_score_value,cyano_score_value) %>% 
+  pivot_longer(cols = c("cca_score_value","coral_score_value", "algae_score_value", "cyano_score_value"), names_to = "value", values_to ="score_value") 
+
+west_health_color<-west_health %>% 
+  select(cca_color, coral_color, algae_color,cyanobacteria_color) %>% 
+  pivot_longer(cols = c("cca_color","coral_color", "algae_color", "cyanobacteria_color"), names_to = "cover_color", values_to ="color") 
+
+
+west_health_value<-west_health %>% 
+  select(depth_strata, cca, live_coral, algae,cyanobacteria) %>% 
+  pivot_longer(cols = c("cca","live_coral", "algae", "cyanobacteria"), names_to = "cover", values_to ="mean") %>% 
+  left_join(dough_universal, by = "cover") %>% 
+  mutate(color = west_health_color$color) %>% 
+  mutate(score_value = west_health_score$score_value)
+  
+shallow<-  west_health_value %>%
+    filter(depth_strata == "shallow") %>% 
+  mutate(rank = with(., case_when(
+    (color == "darkgreen") ~ "Excellent",
+    (color == "palegreen3") ~ "Good",
+    (color == "yellow") ~ "Fair",
+    (color == "orange") ~ "Poor",
+    (color == "darkred") ~ "Very Poor"))) %>%   arrange(cover)
+
+mean(shallow$score_value)
+
+pdf(file = "Western_Islands_dounut.pdf",width =5, height = 5 )
+PieChart(cover, data = shallow,
+         fill = shallow$color, color = "black",
+         main="Western Islands", hole=.4,
+         values_size = 0.09)
+    
+ dev.off()
+ 
+  
+  
 ```
 
 ## Region Cover
