@@ -22,7 +22,7 @@ library(treemapify) # tree map plots
 library(ggVennDiagram) # venn diagrams
 library(lessR) # doughnut plots
 
-setwd("~/Documents/PS eDNA/PNG_2024/")
+
 ```
 
 # Site Data
@@ -72,7 +72,7 @@ site_lengths<-lpi_stations%>%
 
 ```
 
-### Transect Health Asessment Index
+# Transect Health Asessment Index
 
 Health Index derived from live coral cover, algae, cca, and cyanobacteria. Coral cover, cca, and macroalgae percentage caare based from Boyle et al. 2017 as shown in the below image. However, here erect algae and turf are added together to create an "algae" category. The cyanobacteria category for Very Poor I set at  \>=15% based on Puyana et al. 2014 that had \>15% of the reef cover as an indicator of an unbalanced degrading system. The other categories I did fairly arbitrarily: Poor 10-15%, Fair 5-10%, Good 2-5%, and Excellent as \<2% cover. 
 
@@ -92,6 +92,12 @@ PNG_benthos_health<-cover_by_station_and_taxa %>%
   left_join(stations_uvs, by = "ps_station_id") %>% 
   data.frame ()
 
+
+```
+
+## By Score
+
+```{r}
 
 PNG_benthos_health2<-PNG_benthos_health %>%
   select(ps_station_id, cca, live_coral, algae, cyanobacteria) %>% 
@@ -153,6 +159,15 @@ mutate(., Coral_score = with(., case_when(
   left_join(stations_uvs[,c("ps_station_id","ps_site_id","region","subregion","locality","habitat","exposure")], by = "ps_station_id")
 
 
+### Creating a rank_score, color data frame to merge to be graphed locations because not all colors were expressesed
+
+score= c("Excellent","Good", "Fair", "Poor","Very Poor")
+colors_health = c("darkgreen","palegreen3","yellow","orange","darkred" )
+
+
+doughnut_rank_color<-data.frame(score,colors_health)
+
+
 ```
 
 Calculating percentages of poor and good sites across regions.
@@ -195,7 +210,325 @@ PNG_benthos_health2 %>%
 
 ```
 
-#### By location for outreach products
+##### Tingwon
+
+```{r}
+
+ting_score<-PNG_benthos_health2 %>%
+  filter(locality == "Tingwon") %>% 
+   group_by(Rank_score) %>%
+  tally() %>%
+#  mutate(total = sum(n), percent = round((n/total)*100)) %>% 
+  left_join(doughnut_rank_color,  by = c("Rank_score"="score")) %>%
+  mutate(Rank_score = as.factor(Rank_score)) %>% 
+  arrange(Rank_score) %>% 
+  data_frame()
+
+# Getting average rank_value for the middles of the doughnut
+PNG_benthos_health2 %>%
+  filter(locality == "Tingwon") %>% 
+  select(rank_value) %>% 
+  summarise(mean(rank_value))
+
+
+pdf(file = "Tingwon_health_dounut_fill.pdf",width =5, height = 5 )
+# Use style to change some parameter values
+style( add.color="black", add.lwd=2, add_cex = 3)
+PieChart(Rank_score, n, data = ting_score,
+         fill = ting_score$colors_health, color = "black",labels = "input", labels_size =  1,
+         main="Tingwon", hole=.5,labels_color= "black",
+         values_size = 1.5,quiet = T, hole_fill = "yellow", add = "75",x1=0, y1=0, add.lwd=0.9)
+    
+dev.off()
+
+```
+
+##### Tsolik
+
+```{r}
+
+tsol_score<-PNG_benthos_health2 %>%
+  filter(locality == "Tsolik") %>% 
+   group_by(Rank_score) %>%
+  tally() %>%
+  mutate(total = sum(n), percent = round((n/total)*100)) %>% 
+  left_join(doughnut_rank_color,  by = c("Rank_score"="score")) %>%
+  mutate(Rank_score = as.factor(Rank_score)) %>% 
+  arrange(Rank_score) %>% 
+  data_frame()
+
+# Getting average rank_value for the middles of the doughnut
+PNG_benthos_health2 %>%
+  filter(locality == "Tsolik") %>% 
+  select(rank_value) %>% 
+  summarise(mean(rank_value))
+
+
+pdf(file = "Tsolik_health_dounut.pdf",width =5, height = 5 )
+# Use style to change some parameter values
+style( add.color="black", add.lwd=2, add_cex = 3)
+PieChart(Rank_score, n, data = tsol_score,
+         fill = tsol_score$colors_health, color = "black",labels = "input", labels_size =  1,
+         main="Tsolik", hole=.5,labels_color= "black",
+         values_size = 1.5,quiet = T, hole_fill = "orange", add = "60",x1=0, y1=0, add.lwd=0.9)
+    
+dev.off()
+
+```
+
+##### Au
+
+```{r}
+au_score<-PNG_benthos_health2 %>%
+  filter(locality == "Au") %>% 
+   group_by(Rank_score) %>%
+  tally() %>%
+  mutate(total = sum(n), percent = round((n/total)*100)) %>% 
+  left_join(doughnut_rank_color,  by = c("Rank_score"="score")) %>%
+  mutate(Rank_score = as.factor(Rank_score)) %>% 
+  arrange(Rank_score) %>% 
+  data_frame()
+
+# Getting average rank_value for the middles of the doughnut
+PNG_benthos_health2 %>%
+  filter(locality == "Au") %>% 
+  select(rank_value) %>% 
+  summarise(mean(rank_value))
+
+
+pdf(file = "Au_health_dounut.pdf",width =5, height = 5 )
+# Use style to change some parameter values
+style( add.color="black", add.lwd=2, add_cex = 3)
+PieChart(Rank_score, n, data = au_score,
+         fill = au_score$colors_health, color = "black",labels = "input", labels_size =  1,
+         main="Au", hole=.5,labels_color= "black",
+         values_size = 1.5,quiet = T, hole_fill = "yellow", add = "76",x1=0, y1=0, add.lwd=0.9)
+    
+dev.off()
+```
+
+##### Lovangai
+
+```{r}
+
+lov_score<-PNG_benthos_health2 %>%
+  filter(region == "Lovongai") %>% 
+   group_by(Rank_score) %>%
+  tally() %>%
+  mutate(total = sum(n), percent = round((n/total)*100)) %>% 
+  left_join(doughnut_rank_color,  by = c("Rank_score"="score")) %>%
+  mutate(Rank_score = as.factor(Rank_score)) %>% 
+  arrange(Rank_score) %>% 
+  data_frame()
+
+# Getting average rank_value for the middles of the doughnut
+PNG_benthos_health2 %>%
+  filter(region == "Lovongai") %>% 
+  select(rank_value) %>% 
+  summarise(mean(rank_value))
+
+
+pdf(file = "Lovongai_health_dounut_fill.pdf",width =5, height = 5 )
+# Use style to change some parameter values
+style( add.color="black", add.lwd=2, add_cex = 3)
+PieChart(Rank_score, n, data = lov_score,
+         fill = lov_score$colors_health, color = "black",
+         main="Lovongai", hole=.5,labels_color= "black",labels_size =  1,labels = "input", 
+         values_size = 1.5, hole_fill = "yellow",add = "72",x1=0, y1=0, add.lwd=0.9 )
+
+dev.off()
+
+```
+
+##### Murat
+
+```{r}
+
+mur_score<-PNG_benthos_health2 %>%
+  filter(region == "Murat") %>% 
+   group_by(Rank_score) %>%
+  tally() %>%
+  mutate(total = sum(n), percent = round((n/total)*100)) %>% 
+  left_join(doughnut_rank_color,  by = c("Rank_score"="score")) %>%
+  mutate(Rank_score = as.factor(Rank_score)) %>% 
+  arrange(Rank_score) %>% 
+  data_frame()
+
+# Getting average rank_value for the middles of the doughnut
+PNG_benthos_health2 %>%
+  filter(region == "Murat") %>% 
+  select(rank_value) %>% 
+  summarise(mean(rank_value))
+
+# Use style to change some parameter values
+style( add.color="black", add.lwd=2, add_cex = 3)
+pdf(file = "Murat_health_dounut_fill.pdf",width =5, height = 5 )
+PieChart(Rank_score, n, data = mur_score,
+         fill = mur_score$colors_health, color = "black",
+         main="Murat", hole=.5,labels_color= "black",labels_size =  1.5,labels = "input", 
+         values_size = 1, hole_fill = "yellow",add = "75",x1=0, y1=0, add.lwd=0.9 )
+    
+dev.off()
+
+```
+
+##### Emirau
+
+```{r}
+
+emi_score<-PNG_benthos_health2 %>%
+  filter(subregion == "Emirau") %>% 
+   group_by(Rank_score) %>%
+  tally() %>%
+  mutate(total = sum(n), percent = round((n/total)*100)) %>% 
+  left_join(doughnut_rank_color,  by = c("Rank_score"="score")) %>%
+  mutate(Rank_score = as.factor(Rank_score)) %>% 
+  arrange(Rank_score) %>% 
+  data_frame()
+
+# Getting average rank_value for the middles of the doughnut
+PNG_benthos_health2 %>%
+  filter(subregion == "Emirau") %>% 
+  select(rank_value) %>% 
+  summarise(mean(rank_value))
+
+# Use style to change some parameter values
+style( add.color="black", add.lwd=2, add_cex = 3)
+pdf(file = "Emirau_health_dounut_fill.pdf",width =5, height = 5 )
+PieChart(Rank_score, n, data = emi_score,
+         fill = emi_score$colors_health, color = "black",
+         main="Emirau", hole=.5,labels_color= "black",labels_size =  2,labels = "input", 
+         values_size = 1, hole_fill = "yellow",add = "70",x1=0, y1=0, add.lwd=0.9 )
+    
+dev.off()
+
+```
+
+##### Tench
+
+```{r}
+
+ten_score<-PNG_benthos_health2 %>%
+  filter(subregion == "Tench") %>% 
+   group_by(Rank_score) %>%
+  tally() %>%
+  mutate(total = sum(n), percent = round((n/total)*100)) %>% 
+  left_join(doughnut_rank_color,  by = c("Rank_score"="score")) %>%
+  mutate(Rank_score = as.factor(Rank_score)) %>% 
+  arrange(Rank_score) %>% 
+  data_frame()
+
+# Getting average rank_value for the middles of the doughnut
+PNG_benthos_health2 %>%
+  filter(subregion == "Tench") %>% 
+  select(rank_value) %>% 
+  summarise(mean(rank_value))
+
+# Use style to change some parameter values
+style( add.color="black", add.lwd=2, add_cex = 3)
+pdf(file = "Tench_health_dounut_fill.pdf",width =5, height = 5 )
+PieChart(Rank_score, n, data = ten_score,
+         fill = ten_score$colors_health, color = "black",
+         main="Tench", hole=.5,labels_color= "black",labels_size =  1.5,labels = "input", 
+         values_size = 1, hole_fill = "yellow",add = "75",x1=0, y1=0, add.lwd=0.9 )
+    
+dev.off()
+
+```
+
+##### Lolieng
+
+```{r}
+
+lol_score<-PNG_benthos_health2 %>%
+  filter(locality == "Lolieng") %>% 
+   group_by(Rank_score) %>%
+  tally() %>%
+  mutate(total = sum(n), percent = round((n/total)*100)) %>% 
+  left_join(doughnut_rank_color,  by = c("Rank_score"="score")) %>%
+  mutate(Rank_score = as.factor(Rank_score)) %>% 
+  arrange(Rank_score) %>% 
+  data_frame()
+
+# Getting average rank_value for the middles of the doughnut
+PNG_benthos_health2 %>%
+  filter(locality == "Lolieng") %>% 
+  select(rank_value) %>% 
+  summarise(mean(rank_value))
+
+# Use style to change some parameter values
+style( add.color="black", add.lwd=2, add_cex = 3)
+pdf(file = "Lolieng_health_dounut_fill.pdf",width =5, height = 5 )
+PieChart(Rank_score, n, data = lol_score,
+         fill = lol_score$colors_health, color = "black",
+         main="Lolieng", hole=.5,labels_color= "black",labels_size =  1.5,labels = "input", 
+         values_size = 1, hole_fill = "Green",add = "85",x1=0, y1=0, add.lwd=0.9 )
+    
+dev.off()
+
+```
+
+##### Western Islands
+
+```{r}
+
+west_score<-PNG_benthos_health2 %>%
+  filter(region == "Western Islands") %>% 
+   group_by(Rank_score) %>%
+  tally() %>%
+  mutate(total = sum(n), percent = round((n/total)*100)) %>% 
+  left_join(doughnut_rank_color,  by = c("Rank_score"="score")) %>%
+  mutate(Rank_score = as.factor(Rank_score)) %>% 
+  arrange(Rank_score) %>% 
+  data_frame()
+
+PNG_benthos_health2 %>%
+  filter(region == "Western Islands") %>% 
+  select(rank_value) %>% 
+  summarise(mean(rank_value))
+
+
+pdf(file = "Western_Islands_health_dounut_fill.pdf",width =5, height = 5 )
+PieChart(Rank_score, percent, data = west_score,
+         fill = west_score$colors_health, color = "black",
+         main="Western Islands",hole=.5,labels_color= "black",labels_size =  1.5,labels = "input", 
+         values_size = 1, hole_fill = "yellow",add = "79",x1=0, y1=0, add.lwd=0.9 )
+    
+dev.off()
+
+```
+
+##### Manus
+
+```{r}
+
+man_score<-PNG_benthos_health2 %>%
+  filter(region == "Manus") %>% 
+   group_by(Rank_score) %>%
+  tally() %>%
+  mutate(total = sum(n), percent = round((n/total)*100)) %>% 
+  left_join(doughnut_rank_color,  by = c("Rank_score"="score")) %>%
+  mutate(Rank_score = as.factor(Rank_score)) %>% 
+  arrange(Rank_score) %>% 
+  data_frame()
+
+PNG_benthos_health2 %>%
+  filter(region == "Manus") %>% 
+  select(rank_value) %>% 
+  summarise(mean(rank_value))
+
+
+pdf(file = "Manus_health_dounut.pdf",width =5, height = 5 )
+PieChart(Rank_score, percent, data = man_score,
+         fill = man_score$colors_health, color = "black",
+         main="Manus", hole=.5,labels_color= "black",labels_size =  1.5,labels = "input", 
+         values_size = 1, hole_fill = "yellow",add = "76",x1=0, y1=0, add.lwd=0.9 )
+    
+dev.off()
+
+```
+
+## By Benthic Category
 
 For these, we are creating doughnut plots that have equal proportions of the 4 health categories (cca, algae, cyanobacteria, coral) but colored based on condition (excellent, good, fair, poor, very poor). These are done based on promised community engagements within Lovongai and Murat. Manus and Western will be pooled.
 
@@ -225,25 +558,25 @@ ting_health<-PNG_benthos_health %>%
     (cca < 20 & cca >= 10) ~ "palegreen3",
     (cca < 10 & cca >= 5) ~ "yellow",
     (cca < 5 & cca >= 2) ~ "orange",
-    (cca < 2) ~ "orangered4"))) %>%
+    (cca < 2) ~ "darkred"))) %>%
 mutate(., coral_color = with(., case_when(
   (live_coral >= 40 ) ~ "darkgreen",
   (live_coral < 40 & live_coral >= 30) ~ "palegreen3",
   (live_coral < 30 & live_coral >= 20) ~ "yellow",
   (live_coral < 20 & live_coral >= 10) ~ "orange",
-  (live_coral < 10) ~ "orangered4"))) %>%
+  (live_coral < 10) ~ "darkred"))) %>%
   mutate(., algae_color = with(., case_when(
     (algae < 5 ) ~ "darkgreen",
     (algae <10  & algae >= 5) ~ "palegreen3",
     (algae < 20 & algae >= 10) ~ "yellow",
     (algae < 30 & algae >= 20) ~ "orange",
-    (algae >= 30) ~ "orangered4"))) %>%
+    (algae >= 30) ~ "darkred"))) %>%
   mutate(., cyanobacteria_color = with(., case_when(
     (cyanobacteria < 2 ) ~ "darkgreen",
     (cyanobacteria <5& cyanobacteria >= 2) ~ "palegreen3",
     (cyanobacteria < 10 & cyanobacteria >= 5) ~ "yellow",
     (cyanobacteria < 15 & cyanobacteria >= 10) ~ "orange",
-    (cyanobacteria >= 15) ~ "orangered4"))) %>% 
+    (cyanobacteria >= 15) ~ "darkred"))) %>% 
   mutate(., cca_score_value = as.numeric(with(., case_when(
     (cca >= 20 ) ~ "95",
     (cca < 20 & cca >= 10) ~ "85",
@@ -293,7 +626,7 @@ shallow<-  ting_health_value %>%
     (color == "palegreen3") ~ "Good",
     (color == "yellow") ~ "Fair",
     (color == "orange") ~ "Poor",
-    (color == "orangered4") ~ "Very Poor"))) %>% 
+    (color == "darkred") ~ "Very Poor"))) %>% 
   arrange(cover)
 
 mean(shallow$score_value)
@@ -2289,7 +2622,7 @@ dom_manus<-
 
 # Coral Genus
 
-##### Site
+##### Site merging for Leg1 and Leg2
 
 ```{r}
 
@@ -2319,7 +2652,15 @@ gen$site<-NULL
 gen$label<-NULL
 
 
-# Genera
+```
+
+##### Region Richness
+
+In an attempt to avoid confusing graphs with std lines around means, creating a bar graph of total generic richness across regions and adding a site mean line.
+
+```{r}
+
+# Getting site means for graph
 gen_site_mean<-gen %>%
   group_by(ps_site_id, genus) %>%
   dplyr::summarise(length = length(genus)) %>%
@@ -2329,14 +2670,18 @@ gen_site_mean<-gen %>%
   dplyr::group_by(region) %>%
   dplyr::summarise(mean = mean(count), x1 = count[which.min(count)], x2 = count[which.max(count)]) 
 
-gen_site_richness<-gen %>%
-  left_join(sites_uvs[,c("ps_site_id","region","subregion","habitat","exposure")]) %>%
-   distinct(region, genus) %>%
-  group_by(region) %>%
-   dplyr::summarise(richness = length(genus))
-  
- 
-gen_region<-cbind(gen_site_mean, gen_site_richness[,c("richness")])
+
+# Getting total richess
+gen_reg_richness<-gen %>%
+  left_join(sites_uvs[,c("ps_site_id","region","subregion","habitat","exposure")] ) %>%
+ group_by(region, genus) %>%
+  distinct(region, genus) %>%
+  mutate(rep = 1)%>%
+  group_by(region)%>%
+  dplyr::summarize(richness = sum(rep))
+
+
+gen_region<-cbind(gen_site_mean, gen_reg_richness[,c("richness")])
 gen_region$region2<- factor(gen_region$region, levels = c("Murat","Lovongai" ,"Manus","Western Islands"))
 
 
@@ -2359,27 +2704,101 @@ geom_point(aes(region2, mean, color = region2),  size = 10)+
 
 
 
+
+
 ```
 
-##### Region Richness
+##### Taxon cleaning - Leg2
+
+Cleaning up taxonomy and adding family and order for appendix of corals. Only doing Leg2 cause have species info....
 
 ```{r}
-gen_reg_richness<-gen %>%
-  left_join(sites_uvs[,c("ps_site_id","region","subregion","habitat","exposure")] ) %>%
- group_by(region, genus) %>%
-  distinct(region, genus) %>%
-  mutate(rep = 1)%>%
-  group_by(region)%>%
-  dplyr::summarize(richness = sum(rep))
+# creating column with the c.f species and sp. since need to remove this from their names in order to run through the taxonomy. But this will be the record for these names.
+
+coral_sp_leg2<-read_excel("~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/raw/benthos/PS_PNG_Leg_2_AJKM_Coral_Long_FINAL_1.xlsx", sheet = 1)
+
+### Need to clean up site id's
+coral_sp_leg2$ps_site_id<-gsub("_","_2024_uvs_", coral_sp_leg2$Site)
+coral_sp_leg2<- coral_sp_leg2 %>% dplyr::mutate(label = str_extract(Site, "[^_]+$"))
 
 
+coral_sp_leg2<- coral_sp_leg2 %>%
+  mutate(cf_sp = ifelse(str_detect(Species, "cf") | str_detect(Species, "sp") ,coral_sp_leg2$Species,""))
+# Adding this to notes colums
+coral_sp_leg2$notes<-paste(coral_sp_leg2$cf_sp, coral_sp_leg2$notes, sep = "    ")
+coral_sp_leg2$notes<-gsub("NA","",coral_sp_leg2$notes)
+coral_sp_leg2$cf_sp<-NULL
 
-  Rep=rep(1,nrow(gen_reg))
-  summarise(num = length(genus))%>%
-  group_by(region) %>%
-  summarise(mean = mean(num)) 
-  
-unique(gen$genus) # 68
+# cleaning up taxa column so that it can be read into worms
+coral_sp_leg2$Species<-gsub(" sp.","",coral_sp_leg2$Species)
+coral_sp_leg2$Species<-gsub(" sp","",coral_sp_leg2$Species)
+coral_sp_leg2$Species<-gsub(" cf","",coral_sp_leg2$Species)
+coral_sp_leg2$Species<-gsub(" c.f.","",coral_sp_leg2$Species)
+coral_sp_leg2$Species<-gsub(" 1","",coral_sp_leg2$Species)
+coral_sp_leg2$Species<-gsub(" 2","",coral_sp_leg2$Species)
+coral_sp_leg2$Species<-gsub(" aff","",coral_sp_leg2$Species)
+coral_sp_leg2$Species<-gsub("1","",coral_sp_leg2$Species)
+coral_sp_leg2$Species<-gsub("lobata/australiensis","",coral_sp_leg2$Species)
+coral_sp_leg2$Species<-gsub("Porites 3 (aff lichen)","Porites",coral_sp_leg2$Species)
+coral_sp_leg2$Species<-trimws(coral_sp_leg2$Species, which = "right")
+
+sort(unique(coral_sp_leg2$Species))
+
+
+# Running through WORMS for streamlined taxa names
+cleanTaxa<-distinct(coral_sp_leg2[,c("Species")])
+
+taxonomy_worms <- cleanTaxa$Species %>% 
+  split(ceiling(seq_along(cleanTaxa$Species)/20)) %>% 
+  furrr::future_map_dfr(worrms::wm_records_names) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(scientificname)) %>% 
+  mutate(rank = str_to_lower(rank),
+         taxon_id = if_else(!is.na(valid_aphia_id),
+                            paste0("WORMS:", valid_aphia_id),                        NA_character_)) %>% 
+  select(Species = scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, taxon_authority = valid_authority, kingdom, phylum, class, order, family, genus) %>% 
+  distinct()
+
+## Lots of name issues
+bad_names<-anti_join(unique(coral_sp_leg2[,c("Species")]), taxonomy_worms[,c("taxon_valid_name")], by = c("Species" ="taxon_valid_name"))
+sort(bad_names$taxa)
+# going back to correct and rerun taxaworms function
+
+# Without the bad names, exporting as data file cleaned.
+#write.csv(invert, "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/PNG-2024/data/primary/raw/benthos/Updated_PNG_2024_inverts_fieldsheet.csv", row.names = F)
+
+
+# what are the duplicates
+duped_taxa_worms <- taxonomy_worms %>% 
+  janitor::get_dupes(Species) 
+
+deduped_taxa_worms <- duped_taxa_worms %>% 
+  filter(status %in% c("accepted")) %>% 
+  select(-dupe_count)
+
+taxonomy_worms <- taxonomy_worms %>% 
+  group_by(Species) %>% 
+  filter(n() <= 1) %>% # remove duplicates
+  bind_rows(deduped_taxa_worms) # add deduped
+
+
+taxonomy_worms<-as.data.frame(taxonomy_worms[,c("Species","genus","family", "order","class","phylum", "taxon_valid_name")])
+# species isn't really species as it has the lowest taxon, so
+# remaking species column from taxon_valid_name
+
+# this just created a column called species and if there was a space (which would indicate a species name), then it marks it as true
+taxonomy_worms$species<-str_count(taxonomy_worms$taxon_valid_name, " ") > 0
+# if else statement, if T copy the taxon_valid_name, if F, then keep it blank
+taxonomy_worms$species<-ifelse(taxonomy_worms$species == T,taxonomy_worms$taxon_valid_name,"" )
+taxonomy_worms_use<-taxonomy_worms[,c("order", "family", "taxon_valid_name","Species")]
+
+# are there any differences or do they all match up?
+setdiff(coral_sp_leg2$Species, taxonomy_worms$taxon_valid_name)
+
+# once cleaned, joining the full taxonomy back to the main df
+coral_sp_leg2_modified<-left_join(coral_sp_leg2, taxonomy_worms, by = c("Species"))
+
+
 
 ```
 
@@ -2950,6 +3369,29 @@ colnames(apen_lpi)<-c("Functional group","Phylum","Class","Order","Family","Taxa
 apen_lpi2<-ifelse(is.na(apen_lpi[,c("Murat","Lovongai","Manus","Western Islands")]), "","X")
 appen_lpi_final<-cbind(apen_lpi[,1:6], apen_lpi2)
 write.csv(appen_lpi_final,"PNG_2024_LPI_Appendix.csv", row.names = F)
+
+
+```
+
+##### Coral
+
+```{r}
+
+### Need to clean up ps_site_id
+
+apen_coral<-coral_sp_leg2_modified %>%
+  left_join(sites_uvs[,c("ps_site_id","region")], by = "ps_site_id")%>%
+  group_by(region, taxon_valid_name, family) %>%
+   distinct(region, taxon_valid_name,  family) %>%
+  mutate(rep = 1)%>%
+  pivot_wider(names_from = region, values_from = rep) 
+
+apen_coral<-apen_coral[,c("family","taxon_valid_name","Manus","Western Islands")]
+colnames(apen_coral)<-c("Family","Taxa","Manus","Western Islands")
+apen_coral2<-ifelse(is.na(apen_coral[,c("Manus","Western Islands")]), "","X")
+
+appen_coral_final<-cbind(apen_coral[,1:2], apen_coral2)
+write.csv(appen_coral_final,"PNG_2024_Coral_Appendix.csv", row.names = F)
 
 
 ```
