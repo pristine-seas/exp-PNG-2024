@@ -313,6 +313,7 @@ dev.off()
 
 lov_score<-PNG_benthos_health2 %>%
   filter(region == "Lovongai") %>% 
+  filter(!subregion %in% c("Tingwon","Au")) %>% 
    group_by(Rank_score) %>%
   tally() %>%
   mutate(total = sum(n), percent = round((n/total)*100)) %>% 
@@ -324,17 +325,18 @@ lov_score<-PNG_benthos_health2 %>%
 # Getting average rank_value for the middles of the doughnut
 PNG_benthos_health2 %>%
   filter(region == "Lovongai") %>% 
+  filter(!subregion %in% c("Tingwon","Au")) %>% 
   select(rank_value) %>% 
   summarise(mean(rank_value))
 
 
-pdf(file = "Lovongai_health_dounut_fill.pdf",width =5, height = 5 )
+pdf(file = "Benthic_index_Lovongai_dounut_fill.pdf",width =5, height = 5 )
 # Use style to change some parameter values
 style( add.color="black", add.lwd=2, add_cex = 3)
 PieChart(Rank_score, n, data = lov_score,
          fill = lov_score$colors_health, color = "black",
          main="Lovongai", hole=.5,labels_color= "black",labels_size =  1,labels = "input", 
-         values_size = 1.5, hole_fill = "yellow",add = "72",x1=0, y1=0, add.lwd=0.9 )
+         values_size = 1.5, hole_fill = "orange",add = "67",x1=0, y1=0, add.lwd=0.9 )
 
 dev.off()
 
@@ -643,105 +645,6 @@ dev.off()
   
 ```
 
-##### Tsolik
-
-```{r}
-
-tsol_health<-PNG_benthos_health %>%
-  filter(locality == "Tsolik") %>% 
-   select(ps_station_id, cca,live_coral, algae, cyanobacteria, depth_strata) %>% 
-    group_by(depth_strata) %>% 
- #select(cca,live_coral, algae, cyanobacteria) %>% 
-  summarize(live_coral = mean(live_coral), cyanobacteria = mean(cyanobacteria), cca=mean(cca), algae= mean(algae)) %>% 
-    mutate(., cca_color = with(., case_when(
-    (cca >= 20 ) ~ "darkgreen",
-    (cca < 20 & cca >= 10) ~ "palegreen3",
-    (cca < 10 & cca >= 5) ~ "yellow",
-    (cca < 5 & cca >= 2) ~ "orange",
-    (cca < 2) ~ "darkred"))) %>%
-mutate(., coral_color = with(., case_when(
-  (live_coral >= 40 ) ~ "darkgreen",
-  (live_coral < 40 & live_coral >= 30) ~ "palegreen3",
-  (live_coral < 30 & live_coral >= 20) ~ "yellow",
-  (live_coral < 20 & live_coral >= 10) ~ "orange",
-  (live_coral < 10) ~ "darkred"))) %>%
-  mutate(., algae_color = with(., case_when(
-    (algae < 5 ) ~ "darkgreen",
-    (algae <10  & algae >= 5) ~ "palegreen3",
-    (algae < 20 & algae >= 10) ~ "yellow",
-    (algae < 30 & algae >= 20) ~ "orange",
-    (algae >= 30) ~ "darkred"))) %>%
-  mutate(., cyanobacteria_color = with(., case_when(
-    (cyanobacteria < 2 ) ~ "darkgreen",
-    (cyanobacteria <5& cyanobacteria >= 2) ~ "palegreen3",
-    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "yellow",
-    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "orange",
-    (cyanobacteria >= 15) ~ "darkred"))) %>% 
-  mutate(., cca_score_value = as.numeric(with(., case_when(
-    (cca >= 20 ) ~ "95",
-    (cca < 20 & cca >= 10) ~ "85",
-    (cca < 10 & cca >= 5) ~ "75",
-    (cca < 5 & cca >= 2) ~ "65",
-    (cca < 2) ~ "50")))) %>%
-  mutate(., coral_score_value = as.numeric(with(., case_when(
-    (live_coral >= 40 ) ~ "95",
-    (live_coral < 40 & live_coral >= 30) ~ "85",
-    (live_coral < 30 & live_coral >= 20) ~ "75",
-    (live_coral < 20 & live_coral >= 10) ~ "65",
-    (live_coral < 10) ~ "50")))) %>%
-  mutate(., algae_score_value = as.numeric(with(., case_when(
-    (algae < 5 ) ~ "95",
-    (algae <10  & algae >= 5) ~ "85",
-    (algae < 20 & algae >= 10) ~ "75",
-    (algae < 30 & algae >= 20) ~ "65",
-    (algae >= 30) ~ "50")))) %>%
-  mutate(., cyano_score_value = as.numeric(with(., case_when(
-    (cyanobacteria < 2 ) ~ "95",
-    (cyanobacteria <5& cyanobacteria >= 2) ~ "85",
-    (cyanobacteria < 10 & cyanobacteria >= 5) ~ "75",
-    (cyanobacteria < 15 & cyanobacteria >= 10) ~ "65",
-    (cyanobacteria >= 15) ~ "50"))))
-
-
-tsol_health_score<-tsol_health %>% 
-  select(cca_score_value, coral_score_value, algae_score_value,cyano_score_value) %>% 
-  pivot_longer(cols = c("cca_score_value","coral_score_value", "algae_score_value", "cyano_score_value"), names_to = "value", values_to ="score_value") 
-
-tsol_health_color<-tsol_health %>% 
-  select(cca_color, coral_color, algae_color,cyanobacteria_color) %>% 
-  pivot_longer(cols = c("cca_color","coral_color", "algae_color", "cyanobacteria_color"), names_to = "cover_color", values_to ="color") 
-
-
-tsol_health_value<-tsol_health %>% 
-  select(depth_strata, cca, live_coral, algae,cyanobacteria) %>% 
-  pivot_longer(cols = c("cca","live_coral", "algae", "cyanobacteria"), names_to = "cover", values_to ="mean") %>% 
-  left_join(dough_universal, by = "cover") %>% 
-  mutate(color = tsol_health_color$color) %>% 
-  mutate(score_value = tsol_health_score$score_value)
-  
-shallow<-  tsol_health_value %>%
-    filter(depth_strata == "shallow") %>% 
-  mutate(rank = with(., case_when(
-    (color == "darkgreen") ~ "Excellent",
-    (color == "palegreen3") ~ "Good",
-    (color == "yellow") ~ "Fair",
-    (color == "orange") ~ "Poor",
-    (color == "darkred") ~ "Very Poor"))) %>%   arrange(cover)
-
-mean(shallow$score_value)
-
-pdf(file = "tsolik_dounut.pdf",width =5, height = 5 )
-PieChart(cover, data = shallow,
-         fill = shallow$color, color = "black",
-         main="Tsolik", hole=.4,
-         values_size = 0.09)
-    
- dev.off()
- 
-  
-  
-```
-
 ##### Au
 
 ```{r}
@@ -841,12 +744,13 @@ PieChart(cover, data = shallow,
   
 ```
 
-##### Lovonagi
+##### Lovonagi - minus Au and Tingwon
 
 ```{r}
 
 lov_health<-PNG_benthos_health %>%
   filter(region == "Lovongai") %>% 
+    filter(!subregion %in% c("Tingwon","Au")) %>% 
    select(ps_station_id, cca,live_coral, algae, cyanobacteria, depth_strata) %>% 
     group_by(depth_strata) %>% 
  #select(cca,live_coral, algae, cyanobacteria) %>% 
