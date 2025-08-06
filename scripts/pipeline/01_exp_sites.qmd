@@ -37,17 +37,86 @@ bigrquery::bq_auth(email = "marine.data.science@ngs.org")
 
 bq_connection <- DBI::dbConnect(bigrquery::bigquery(), 
                                 project = "pristine-seas")
+```
 
+```{r}
 # Core site field
 
-core_site_fields <- c("exp_id", "leg", "survey_type", "ps_site_id", "region", "subregion", "locality",
-                      "date", "time", "latitude", "longitude", "lead", "notes")
+core_site_fields <- c("ps_site_id","exp_id", "method", "region", "subregion", "locality",
+                      "date", "time", "latitude", "longitude", "team_lead", "notes")
 
-# Useful functions 
+# QAQC Functions ----
+
+check_site_duplicates <- function(df, method_name) {
+  dups <- df |> 
+    count(ps_site_id, sort = TRUE) |> 
+    filter(n > 1)
+  
+  if(nrow(dups) > 0) {
+    cat("⚠️ ", method_name, ": Found", nrow(dups), "duplicate site IDs\n")
+    print(dups)
+  } else {
+    cat("✅ ", method_name, ": No duplicate site IDs\n")
+  }
+  return(dups)
+}
+
+check_coordinates <- function(df, method_name, lat_range = c(-40, 40), lon_range = c(-180, 180)) {
+  coord_issues <- df |> 
+    filter(is.na(latitude) | is.na(longitude) | 
+           latitude < lat_range[1] | latitude > lat_range[2] |
+           longitude < lon_range[1] | longitude > lon_range[2]) |> 
+    select(ps_site_id, latitude, longitude)
+  
+  if(nrow(coord_issues) > 0) {
+    cat("⚠️ ", method_name, ": Found", nrow(coord_issues), "coordinate issues\n")
+    print(coord_issues)
+  } else {
+    cat("✅ ", method_name, ": All coordinates valid\n")
+  }
+  return(coord_issues)
+}
+
+check_dates <- function(df, method_name) {
+  date_issues <- df |> 
+    filter(is.na(date)) |> 
+    select(ps_site_id, date)
+  
+  if(nrow(date_issues) > 0) {
+    cat("⚠️ ", method_name, ": Found", nrow(date_issues), "missing dates\n")
+    print(date_issues)
+  } else {
+    cat("✅ ", method_name, ": All dates present\n")
+  }
+  return(date_issues)
+}
+
+run_qaqc <- function(df, method_name) {
+  cat("\n--- QAQC for", method_name, "---\n")
+  cat("Total records:", nrow(df), "\n")
+  cat("Unique sites:", n_distinct(df$ps_site_id), "\n")
+  
+  # Run checks
+  dups <- check_site_duplicates(df, method_name)
+  coords <- check_coordinates(df, method_name)
+  dates <- check_dates(df, method_name)
+  
+  # Return summary
+  list(
+    method = method_name,
+    total_records = nrow(df),
+    unique_sites = n_distinct(df$ps_site_id),
+    duplicate_sites = nrow(dups),
+    coordinate_issues = nrow(coords),
+    date_issues = nrow(dates)
+  )
+}
+
+# Other useful functions ----
 
 ## Assign depth strata 
 assign_depth_stratum <- function(depth_m, 
-                                 shallow_threshold = 13,
+                                 shallow_threshold = 14,
                                  super_shallow_threshold = 6) {
   case_when(depth_m == 0 ~ "surface",
             depth_m <= super_shallow_threshold ~ "supershallow",
@@ -56,53 +125,37 @@ assign_depth_stratum <- function(depth_m,
             TRUE ~ NA_character_)}
 
 ## Map depth labels (supershallow) to strata "05m"
-stratum_to_suffix <- c("surface" = "00m",
+stratum_to_suffix <- c("surface"      = "00m",
                        "supershallow" = "05m",
-                       "shallow" = "10m",
-                       "deep" = "20m")
+                       "shallow"      = "10m",
+                       "deep"         = "20m")
+
+
+# Initialize containers for all methods
+
+all_sites <- list()
+qaqc_results <- list()
+```
+
+```{r}
+region_spelling_fixes <- c("Metenmin" = "Metemin",
+                           "Metovai" = "Metevoi",
+                           "Tsoi" = "Tsoilik",
+                           "Tsolik" = "Tsoilik")
 ```
 
 ## Overview
 
-This script processes and uploads all **site-level metadata** for the **`r exp_id`** expedition to the Pristine Seas Database in BigQuery. It consolidates fieldbook records across all methods into a single, unified pipeline for QAQC, mapping, and upload.
+This script consolidates **site-level metadata** from the **`r exp_id`** expedition fieldbooks into a unified pipeline for validation, visualization, and upload to BigQuery. 
 
-The goals of this script are to:
+**Workflow**: Import → Standardize → Validate → Visualize → Upload
 
-1.  **Import fieldbook data** for all applicable methods. 
-2.  **Standardize site metadata** according to the Pristine Seas core site schema.
-3.  **Perform QAQC checks** across methods to catch early issues, such as:
-    -   Duplicate or malformed site IDs
-    -   Missing or invalid coordinates
-    -   Inconsistent location, habitat, or exposure values
-4.  **Visualize all sites** in an interactive map to confirm spatial accuracy and coverage.
-5.  **Summarize** sampling effort by method and locations.
-5.  **Upload cleaned site tables** to the appropriate method-specific datasets in BigQuery.
+Site metadata can be processed immediately after fieldwork, providing a foundation for future data integration while downstream analyses (e.g., video processing) are completed.
 
-This centralized approach enables early validation, visualization, and reporting of spatial data across methods. While downstream datasets (e.g., BRUVS video analysis) may take months to process, site metadata can be uploaded immediately after fieldwork using fieldbooks—providing a solid foundation for future data integration and analysis.
-
-## QAQC model
-
-A crucial early step in building the Pristine Seas Database is to run quality checks on our fieldbooks before uploading them to BigQuery. These QA/QC checks help ensure that the data is complete, consistent, and ready for integration. The standard validation checks include:
-
-  - **No duplicated site IDs**: Each ps_site_id must be unique.
-  - **Invalid habitat values**: All values in the habitat column must match the controlled vocabulary:
-"fore reef", "back reef", "fringing reef", "lagoon", "patch reef".
-  - **Invalid exposure values**: All values in the exposure column must match the controlled vocabulary:
-"leeward", "windward", "lagoon".
-  - **Missing or invalid coordinates**: All sites must have non-missing latitude and longitude values, and they must fall within valid ranges (lat: −40 to 40, lon: −180 to 180).
-  - **Missing or invalid date**: All sites must have non-missing latitude and longitude values, and they must fall within valid ranges (lat: −40 to 40, lon: −180 to 180).
-  -	**Visualize missing data**: Generate a missingness map to quickly inspect null values across the table.
-  
-## Surveys
-
-This script processes site metadata from all scientific methods conducted during the expedition and harmonizes them according to the Pristine Seas **core site schema**. The following sections read the fieldbooks, apply QAQC and standardization procedures, and output cleaned site tables ready for upload.
-
-::: {.aside #core-site-fields}
-**Core Site Fields:**  
-`exp_id`, `leg`, `survey_type`, `ps_site_id`, `region`, `subregion`, `locality`, `date`, `time`, `latitude`, `longitude`, `lead`.
-
-These form the minimal metadata required to geolocate and contextualize every sampling site.
-:::
+**Automated QAQC checks:**
+- Unique site IDs and valid coordinates  
+- Complete dates and spatial coverage
+- Interactive maps and summary statistics
 
 ### Underwater Visual Surveys
 
@@ -850,6 +903,8 @@ write_rds(stations,
           file.path(exp_path, "data/primary/processed/stations.rds"))
 ```
 
+
+
 ### Seabed BRUVS
 
 #### QAQC
@@ -919,6 +974,7 @@ mapview::mapview(sbruvs_sites_sf,
                  layer.name = "Region",
                  popup = leafpop::popupTable(sbruvs_sites_sf, zcol = c("ps_site_id", "region", "exposure")))
 ```
+
 
 ### Pelagic BRUVS
 
@@ -1171,6 +1227,7 @@ mapview::mapview(sub_sites_sf,
                  layer.name = "Region",
                  popup = leafpop::popupTable(pbruvs_sites_sf, zcol = c("ps_site_id", "region")))
 ```
+
 
 ### Dropcams
 

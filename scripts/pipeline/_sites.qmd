@@ -1,0 +1,993 @@
+---
+title: "Expedition Metadata and Sites - Enhanced Version"
+date: today
+format: 
+  html:
+    theme: minty
+    self-contained: true
+    code-fold: true
+    toc: true 
+    toc-depth: 3
+    toc-location: right
+execute:
+  fig-width: 10
+---
+
+```{r setup, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
+options(scipen = 999)
+
+# Load libraries
+required_packages <- c("PristineSeasR", "sf", "hms", "readxl", "janitor", 
+                      "lubridate", "gt", "pointblank", "tidyverse", "glue",
+                      "fuzzyjoin", "UpSetR", "leaflet", "leaflet.extras",
+                      "mapview", "leafpop", "naniar", "geosphere")
+
+lapply(required_packages, library, character.only = TRUE, quietly = TRUE)
+
+# =============================================================================
+# CONFIGURATION AND SETUP
+# =============================================================================
+
+# Expedition configuration parameters
+
+exp_config <- list(exp_id      = "PNG_2024",
+               date_bounds = c(as.Date("2024-01-01"), as.Date("2024-12-31")),
+               lat_min     = -12.0, 
+               lat_max     = -1.0,  
+               lon_min     = 140.0, 
+               lon_max     = 155.0)  
+
+core_site_fields <- c("ps_site_id", "exp_id", "method", "region", "subregion", 
+                      "locality", "date", "time", "latitude", "longitude", 
+                      "team_lead", "notes")
+
+# =============================================================================
+# CONTROLLED VOCABULARIES
+# =============================================================================
+
+# Habitat types - standardized terminology
+habitat_vocab <- c("fore_reef", "back_reef", "reef_flat", "patch_reef",   
+                   "pinnacle_reef", "rocky_reef", "reef_pavement",
+                   "channel_pass", "wall", "kelp_forest", "seagrass", "bay", "lagoon", "river_mouth", "river", "mangrove")
+
+# Exposure categories
+exposure_vocab <- c("windward", "leeward", "lagoon", "channel",
+                    "sheltered", "exposed", "unknown")
+
+# Depth strata mapping for site naming
+stratum_to_suffix <- c("surface" = "00m", "supershallow" = "05m", 
+                       "shallow" = "10m", "deep" = "20m")
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+# Assign a depth stratum label based on numeric depth. 
+
+assign_depth_stratum <- function(avg_depth_m, 
+                                 shallow_threshold       = 14,
+                                 super_shallow_threshold = 6) {
+  case_when(avg_depth_m == 0 ~ "surface",
+            avg_depth_m <= super_shallow_threshold ~ "supershallow",
+            avg_depth_m <= shallow_threshold ~ "shallow",
+            avg_depth_m <= 30 ~ "deep",
+            TRUE ~ NA_character_)}
+
+# =============================================================================
+# LOOKUP TABLES FOR DATA STANDARDIZATION
+# =============================================================================
+
+# Habitat standardization - maps field entries to standard vocab
+habitat_lookup <- c("forereef" = "fore_reef",
+                    "patch reef" = "patch_reef", 
+                    "passage" = "channel_pass",
+                    "back reef" = "back_reef",
+                    # eDNA sampling habitat consolidation
+                    "forereef-shallow slope" = "fore_reef",
+                    "coral reef" = "fore_reef",
+                    "backreef" = "back_reef", 
+                    "outside channel" = "channel_pass",
+                    "channel" = "channel_pass",
+                    "bay" = "bay",
+                    "lagoon" = "lagoon", 
+                    "outside river mouth" = "river_mouth",
+                    "river mouth" = "river_mouth",
+                    "river" = "river",
+                    "mangrove/sand flat" = "mangrove")
+
+# Scientist name standardization - maps initials to full names
+scientists_lookup <- c("AMF" = "Alan Friedlander",
+                       "JEC" = "Jennifer Caselle", 
+                       "AM"  = "Andrew McInnis",
+                       "MT"  = "Molly Timmers",
+                       "YW"  = "Yvvone Wong",
+                       "KM"  = "Kat Millage",
+                       "JSM" = "Juan Mayorga")
+
+
+# =============================================================================
+# VISUALIZATION PALETTES
+# =============================================================================
+
+habitat_palette <- c("fore_reef" = "#C5FFFD", "back_reef" = "#DF2935",
+                     "channel_pass" = "#D8CC34", "patch_reef" = "#772D8B")
+
+exposure_palette <- c("leeward" = "#1f78b4", "windward" = "#33a02c", 
+                      "lagoon" = "#ff7f00")
+
+regions_palette <- c("Lovongai" = "#FABC2A", "Manus" = "#44FFD1",
+                     "Murat" = "#275DAD", "Western Islands" = "#FF69EB")
+
+# =============================================================================
+# AUTHENTICATION & PATHS
+# =============================================================================
+
+# Setup paths and authentication
+ps_paths <- PristineSeasR::get_sci_drive_paths()
+exp_path <- file.path(ps_paths$expeditions, str_replace(exp_config$exp_id, "_", "-"))
+
+# BigQuery authentication
+bigrquery::bq_auth(email = "marine.data.science@ngs.org")
+bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas")
+
+exp_id <- exp_config$exp_id
+```
+
+## Overview
+
+This script consolidates **site-level metadata** from the **`r exp_id`** expedition fieldbooks into a unified pipeline for validation, visualization, and upload to BigQuery. 
+
+**Workflow**: Import → Standardize → Validate → Visualize → Upload
+
+Site metadata can be processed immediately after fieldwork, providing a foundation for future data integration while downstream analyses (e.g., video processing) are completed.
+
+### Underwater Visual Surveys
+
+Processes dive-based visual survey metadata.
+
+```{r uvs-import}
+# 1. Import Underwater Visual Surveys (UVS) fieldbook
+
+uvs_sites <- read_xlsx(file.path(exp_path, "data/primary/raw/_PNG-2024-uvs-metadata.xlsx")) |> 
+  clean_names() |> 
+  transmute(exp_id      = exp_id,
+            method      = "uvs",
+            ps_site_id  = str_replace(ps_site_id, "(\\d+)$", ~ str_pad(.x, 3, pad = "0")),
+            region      = str_to_title(region),
+            subregion   = str_to_title(location),
+            locality    = str_to_title(sublocation), 
+            date        = dmy(dd_mm_yyyy),
+            time        = as_hms(local_time),
+            latitude    = as.numeric(lat),
+            longitude   = as.numeric(lon),
+            site_name   = NA_character_,
+            habitat     = str_to_lower(habitat),
+            exposure    = str_to_lower(exposure),
+            in_mpa      =  as.logical(in_mpa),
+            mpa_notes   = as.character(mpa_notes),
+            notes       = NA_character_,
+            team_lead   = team_lead,
+            blt         = as.logical(NA),
+            lpi         = as.logical(NA),
+            inverts     = as.logical(NA),
+            recruits    = as.logical(NA),
+            photoquads  = as.logical(NA),
+            ysi         = as.logical(NA),
+            edna        = as.logical(NA)) |> 
+  mutate(habitat   = recode(habitat, !!!habitat_lookup)) |> 
+  mutate(team_lead = recode(team_lead, !!!scientists_lookup)) 
+
+# Create regions lookup from actual data for validation
+
+regions_lookup_table <- uvs_sites |> 
+  distinct(region, subregion) |> 
+  add_row(region = "Lovongai", subregion = "Metemin") |> 
+  add_row(region = "Lovongai", subregion = "Metevoi") |> 
+  add_row(region = "Lovongai", subregion = "Enelava")
+
+valid_regions <- unique(regions_lookup_table$region)
+valid_subregions <- unique(regions_lookup_table$subregion)
+
+# Display data summary
+cat("UVS Sites Imported:", nrow(uvs_sites), "records\n")
+cat("Regions:", paste(valid_regions, collapse = ", "), "\n")
+
+
+uvs_sites |> 
+  select(exp_id, method, ps_site_id, region, subregion, locality, date, time, latitude, longitude, habitat, exposure, in_mpa, mpa_notes, team_lead) |> 
+  write_csv(file.path(exp_path, "data/primary/processed/uvs_sites.csv"), na = "")
+```
+
+#### QAQC
+
+```{r uvs_qaqc}
+# 2.QA/QC using pointblank
+
+uvs_sites_qaqc <- uvs_sites |> 
+  create_agent(label = "Fish BLT Stations QA/QC", tbl_name = "raw_stations") |> 
+  # Uniqueness check
+  rows_distinct(ps_site_id,
+                label = "Site IDs are unique",
+                actions = action_levels(stop_at = 0.001)) |> 
+  # Habitat and exposure validation against allowed vocab
+  col_vals_in_set(columns = vars(habitat),
+                  set = habitat_vocab,
+                  label = "Habitat is within allowed values",
+                  actions = action_levels(stop_at = 0.1)) |>
+  col_vals_in_set(columns = vars(exposure),
+                  set = exposure_vocab,
+                  label = "Exposure is within allowed values",
+                  actions = action_levels(stop_at = 0.1)) |>
+  # Region validation against lookup table
+  col_vals_in_set(columns = vars(region),
+                  set = valid_regions,
+                  label = "Region matches lookup table",
+                  actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_in_set(columns = vars(subregion), 
+                  set = valid_subregions,
+                  label = "Subregion matches lookup table",
+                  actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  # Geographic bounds validation
+  col_vals_between(columns = vars(latitude),
+                   left = exp_config$lat_min,
+                   right = exp_config$lat_max,
+                   label = "Latitude within PNG bounds",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_between(columns = vars(longitude),
+                   left = exp_config$lon_min, 
+                   right = exp_config$lon_max,
+                   label = "Longitude within PNG bounds",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  # Date validation
+  col_vals_between(columns = vars(date),
+                   left = exp_config$date_bounds[1],
+                   right = exp_config$date_bounds[2], 
+                   label = "Date within expedition period",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  # Critical NAs
+  col_vals_not_null(columns = vars(latitude, longitude),
+                    label = "Coordinates are not missing",
+                    actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_not_null(columns = vars(date),
+                    label = "Date is not missing", 
+                    actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  interrogate()
+
+
+# Display QA/QC results
+uvs_sites_qaqc
+```
+
+```{r uvs-missing-data}
+#| fig-cap: "Missing data in UVS sites fieldbook"
+
+naniar::vis_miss(uvs_sites)
+```
+
+#### Map
+
+```{r uvs-map}
+# Interactive visual map
+
+uvs_sites_sf <- uvs_sites |>
+  mutate(habitat = factor(habitat, levels = names(habitat_palette))) |>
+  sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
+  distinct(ps_site_id, region, subregion, locality, habitat, exposure, geometry)
+
+mapview::mapview(uvs_sites_sf,
+                 zcol = "habitat",
+                 legend = TRUE,
+                 col.regions = habitat_palette,
+                 map.types = "Esri.WorldImagery",
+                 layer.name = "Habitat",
+                 popup = leafpop::popupTable(uvs_sites_sf, 
+                                             zcol = c("ps_site_id", "region", "subregion", "locality", "habitat", "exposure"))) |> 
+  leafem::addMouseCoordinates() |> 
+  addFullscreenControl()
+```
+
+#### Summary
+
+```{r}
+#| label: tbl-uvs-sites-by-habitat
+#| tbl-cap: "Summary of UVS survey effort by region, exposure, and habitat."
+
+uvs_sites |> 
+  group_by(region, habitat, exposure) |>
+  summarize(n_surveys = n(),
+            .groups = "drop") |> 
+  pivot_wider(names_from = habitat, values_from = n_surveys, values_fill = 0) |> 
+  gt(groupname_col = "leg") |> 
+  tab_options(row_group.as_column = T,
+              table.width = pct(80),
+              table.font.size = 12,
+              table.border.top.style = "solid",
+              table.border.top.width = px(1),
+              table.border.top.color = "black",
+              heading.align = "center",
+              column_labels.font.weight = "bold")
+```
+
+### eDNA
+
+```{r}
+edna_samples <- read_xlsx(file.path(exp_path, "data/primary/raw/edna/PNG_2024_edna_fieldbook.xlsx"),
+                          sheet = "metadata") |>
+  clean_names() |>
+  mutate(exp_id         = exp_id, 
+            method         = "edna",
+            latitude       = as.numeric(lat),
+            longitude      = as.numeric(lon),
+            depth_m        = round(as.numeric(depth_m)),
+            replicate      = str_extract(ps_sample_id, "\\d+$"),
+            site_num       = str_extract(ps_station_id, "\\d+$") |> str_pad(3, pad = "0"),
+            ps_site_id     = paste(exp_id, "edna", site_num, sep = "_"),
+            depth_strata   = assign_depth_stratum(depth_m),
+            station_suffix = recode(assign_depth_stratum(depth_m), !!!stratum_to_suffix),
+            ps_station_id  = paste0(ps_site_id, "_", station_suffix),
+            ps_sample_id   = paste0(ps_station_id, "_r", replicate),
+            paired_site_id = str_replace(paired_station_id, "\\d+$", \(x) str_pad(x, 3, pad = "0")),
+            date           = ymd(date),
+            time           = as_hms(collection_time),
+            filter_date    = ymd(filter_date),
+            filter_time    = as_hms(filter_time))
+
+edna_samples <- edna_samples |> 
+  left_join(regions_lookup_table, 
+          by = c("location" = "subregion")) |> 
+  rename(subregion = location,
+         locality = sublocation) |> 
+  mutate(across(where(is.character), ~ na_if(.x, "NA")),
+         team_lead = case_when(team_lead == "YW/KM" ~ "Yvvone Wong | Kat Millage",
+                               team_lead == "YW/ NL" ~ "Yvvone Wong | Naomi Longa",
+                               TRUE ~ team_lead),
+         team_lead = recode(team_lead, !!!scientists_lookup),
+         habitat = recode(str_to_lower(habitat), !!!habitat_lookup)) |> 
+  select(all_of(core_site_fields), 
+         method, ps_station_id, paired_site_id, ps_sample_id, replicate, depth_strata, depth_m, water_liters,
+         preservative, filter_date, filter_time, filter_type, filter_size_um, target, habitat, site_photos)
+
+edna_stations <- edna_samples |>
+  group_by(exp_id, method, ps_station_id, ps_site_id, paired_site_id, depth_strata, depth_m, filter_type, filter_size_um, filter_date, filter_time, target) |>
+  summarize(n_replicates = n_distinct(ps_sample_id),
+            water_liters = sum(water_liters, na.rm = TRUE),
+            notes        = first(na.omit(notes)), .groups = "drop") |>
+  relocate(ps_site_id, .after = ps_station_id)
+
+edna_sites <- edna_samples |>
+  group_by(exp_id, method,  ps_site_id, region, subregion, locality, date, time, latitude, longitude, team_lead, habitat, target, paired_site_id, site_photos) |>
+  summarize(n_stations = n_distinct(ps_station_id),
+            n_samples  = n_distinct(ps_sample_id),
+            notes      = first(na.omit(notes)), .groups = "drop")
+```
+
+#### QAQC
+
+```{r edna_qaqc}
+# 2.QA/QC using pointblank
+
+edna_sites_qaqc <- edna_sites |> 
+  create_agent(label = "eDNA sites QA/QC", tbl_name = "edna_sites") |> 
+  # Uniqueness check
+  rows_distinct(ps_site_id,
+                label = "Site IDs are unique",
+                actions = action_levels(stop_at = 0.001)) |> 
+  # Habitat and exposure validation against allowed vocab
+  col_vals_in_set(columns = vars(habitat),
+                  set = habitat_vocab,
+                  label = "Habitat is within allowed values",
+                  actions = action_levels(stop_at = 0.1)) |>
+  # Region validation against lookup table
+  col_vals_in_set(columns = vars(region),
+                  set = valid_regions,
+                  label = "Region matches lookup table",
+                  actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_in_set(columns = vars(subregion), 
+                  set = valid_subregions,
+                  label = "Subregion matches lookup table",
+                  actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  # Geographic bounds validation
+  col_vals_between(columns = vars(latitude),
+                   left = exp_config$lat_min,
+                   right = exp_config$lat_max,
+                   label = "Latitude within bounds",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_between(columns = vars(longitude),
+                   left = exp_config$lon_min, 
+                   right = exp_config$lon_max,
+                   label = "Longitude within bounds",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  # Date validation
+  col_vals_between(columns = vars(date),
+                   left = exp_config$date_bounds[1],
+                   right = exp_config$date_bounds[2], 
+                   label = "Date within expedition period",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  # Critical NAs
+  col_vals_not_null(columns = vars(latitude, longitude),
+                    label = "Coordinates are not missing",
+                    actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_not_null(columns = vars(date),
+                    label = "Date is not missing", 
+                    actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  interrogate()
+
+
+# Display QA/QC results
+edna_sites_qaqc
+```
+
+```{r edna-missing-data}
+#| fig-cap: "Missing data in UVS sites fieldbook"
+
+naniar::vis_miss(edna_sites)
+```
+
+#### Map
+
+```{r edna-map}
+# Interactive visual map
+
+edna_sites_sf <- edna_sites |>
+  sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
+  distinct(ps_site_id, region, subregion, locality, habitat, geometry)
+
+mapview::mapview(edna_sites_sf,
+                 zcol = "region",
+                 legend = TRUE,
+                 col.regions = regions_palette,
+                 map.types = "Esri.WorldImagery",
+                 layer.name = "Region",
+                 popup = leafpop::popupTable(edna_sites_sf, 
+                                             zcol = c("ps_site_id", "region", "subregion", "locality", "habitat"))) |> 
+  leafem::addMouseCoordinates() |> 
+  addFullscreenControl()
+```
+
+#### Summary
+
+```{r}
+edna_sites |> 
+  group_by(region, habitat, target) |>
+  summarize(n_surveys = n(),
+            .groups = "drop") |> 
+  pivot_wider(names_from = target, values_from = n_surveys, values_fill = 0) |> 
+  gt(groupname_col = "leg") |> 
+  tab_options(row_group.as_column = T,
+              table.width = pct(80),
+              table.font.size = 12,
+              table.border.top.style = "solid",
+              table.border.top.width = px(1),
+              table.border.top.color = "black",
+              heading.align = "center",
+              column_labels.font.weight = "bold")
+```
+
+### Seabed BRUVS
+
+```{r}
+sbruvs_raw <- read_xlsx(file.path(exp_path, "data/primary/raw/bruvs/PNG_2024_bruvs_fieldbook.xlsx"),
+                          sheet = "metadata") |>
+  clean_names() 
+
+sbruvs_stations <- sbruvs_raw |> 
+  mutate(exp_id = "PNG_2024",
+         method = "sbruvs",
+         ps_site_id =   str_replace(ps_station_id, "(\\d+)$", \(x) str_pad(x, 3, pad = "0")),
+         ps_station_id = paste(ps_site_id, paste0(round(depth_m), "m"), sep = "_"),
+         date = ymd(date),
+         time_in = as_hms(time_in),
+         depth_m = as.numeric(depth_m),
+         region = str_to_title(region),
+         subregion = str_to_title(subregion),
+         habitat = NA_character_,
+         exposure = NA_character_)|> 
+  select(ps_site_id, exp_id,  method, everything(), -leg, -type) |> 
+  relocate(habitat, .before = bottom_type) |>
+  relocate(exposure, .after = bottom_type) 
+
+sbruvs_sites <- sbruvs_stations |>
+  rename(time = time_in) |> 
+  select(all_of(core_site_fields)) 
+```
+
+#### QAQC
+
+```{r}
+sbruvs_stations |> 
+  create_agent(label = "Seabed BRUVS sites QA/QC", tbl_name = "sbruvs_stations") |> 
+  # Uniqueness check
+  rows_distinct(ps_site_id,
+                label = "Site IDs are unique",
+                actions = action_levels(stop_at = 0.001)) |> 
+  # Habitat and exposure validation against allowed vocab
+  col_vals_in_set(columns = vars(habitat),
+                  set = habitat_vocab,
+                  label = "Habitat is within allowed values",
+                  actions = action_levels(stop_at = 0.1)) |>
+  # Region validation against lookup table
+  col_vals_in_set(columns = vars(region),
+                  set = valid_regions,
+                  label = "Region matches lookup table",
+                  actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_in_set(columns = vars(subregion), 
+                  set = valid_subregions,
+                  label = "Subregion matches lookup table",
+                  actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  # Geographic bounds validation
+  col_vals_between(columns = vars(latitude),
+                   left = exp_config$lat_min,
+                   right = exp_config$lat_max,
+                   label = "Latitude within bounds",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_between(columns = vars(longitude),
+                   left = exp_config$lon_min, 
+                   right = exp_config$lon_max,
+                   label = "Longitude within bounds",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  # Date validation
+  col_vals_between(columns = vars(date),
+                   left = exp_config$date_bounds[1],
+                   right = exp_config$date_bounds[2], 
+                   label = "Date within expedition period",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  # Critical NAs
+  col_vals_not_null(columns = vars(latitude, longitude),
+                    label = "Coordinates are not missing",
+                    actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_not_null(columns = vars(date),
+                    label = "Date is not missing", 
+                    actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  interrogate()
+```
+```{r sbruvs-missing-data}
+#| fig-cap: "Missing data in UVS sites fieldbook"
+
+naniar::vis_miss(sbruvs_stations)
+```
+
+#### Map
+
+```{r sbruvs-map}
+# Interactive visual map
+
+sbruvs_sites_sf <- sbruvs_stations |>
+  sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
+  distinct(ps_site_id, region, subregion, locality, bottom_type, geometry)
+
+mapview::mapview(sbruvs_sites_sf,
+                 zcol = "region",
+                 legend = TRUE,
+                 col.regions = regions_palette,
+                 map.types = "Esri.WorldImagery",
+                 layer.name = "Region",
+                 popup = leafpop::popupTable(sbruvs_sites_sf, 
+                                             zcol = c("ps_site_id", "region", "subregion", "bottom_type"))) |> 
+  leafem::addMouseCoordinates() |> 
+  addFullscreenControl()
+```
+
+#### Summary
+
+```{r}
+sbruvs_stations |> 
+  group_by(region, subregion, bottom_type) |>
+  summarize(n_surveys = n(),
+            .groups = "drop") |> 
+  pivot_wider(names_from = bottom_type, values_from = n_surveys, values_fill = 0) |> 
+  gt(groupname_col = "leg") |> 
+  tab_options(row_group.as_column = T,
+              table.width = pct(80),
+              table.font.size = 12,
+              table.border.top.style = "solid",
+              table.border.top.width = px(1),
+              table.border.top.color = "black",
+              heading.align = "center",
+              column_labels.font.weight = "bold")
+```
+
+### Pelagic BRUVS
+
+```{r}
+pbruvs_raw <- read_xlsx(file.path(exp_path, "data/primary/raw/pelagics/PNG_2024_pelagics_fieldbook_2024_10_01.xlsx"),
+                        sheet = "Metadata") |>
+  clean_names() 
+
+pbruvs_stations <- pbruvs_raw |> 
+  mutate(exp_id = "PNG_2024",
+         method = "pbruvs",
+         ps_site_id = str_replace(string, "(\\d+)$", \(x) str_pad(x, 3, pad = "0")),
+         ps_site_id = str_replace(ps_site_id, "PNGP24", "PNG_2024_pbruvs"),
+         ps_station_id = paste(ps_site_id, paste0("r",round(rig) ), sep = "_"),
+         sublocation = str_to_title(sublocation),
+         location = str_to_title(location),
+         date = ymd(date),
+         time_in = as_hms(time_in),
+         time_out = as_hms(time_out),
+         drift_hrs = as.numeric(round(difftime(time_out, time_in, units = "hours"),2)),
+         drift_m =  round(as.numeric(geosphere::distHaversine(matrix(c(long_in, lat_in), ncol = 2),
+                                                              matrix(c(long_out, lat_out), ncol = 2))), 2))|> 
+  rename(uwa_opcode = opcode, uwa_string = string, notes = field_comments) |> 
+  select(exp_id, leg, method, ps_site_id, ps_station_id, location, sublocation, date, 
+         rig, left_cam, right_cam, time_in, time_out, contains("lat_"), contains("long_"), drift_hrs, drift_m,
+         bait, uwa_opcode, uwa_string, species_notes, notes, team_lead) |> 
+  left_join(regions_lookup_table,
+            by = c("location" = "subregion")) |> 
+  rename(subregion = location, 
+         locality = sublocation) |> 
+  relocate(region, .before = subregion) 
+
+pbruvs_sites <- pbruvs_stations |> 
+  group_by(exp_id, method, ps_site_id, uwa_string, region, subregion, locality, date, team_lead) |> 
+  summarise(time = first(na.omit(time_in)),
+            latitude = mean(lat_in, na.rm = T),
+            longitude = mean(long_in, na.rm = T),
+            n_rigs = n_distinct(ps_station_id), 
+            drift_m = round(mean(drift_m),2),
+            drift_hrs = round(mean(drift_hrs),2),
+            notes = first(na.omit(notes)),
+            .groups = "drop") |> 
+  select(all_of(core_site_fields), n_rigs, drift_m, drift_hrs) 
+```
+ 
+#### QAQC
+ 
+```{r}
+max_drift_m <- 5000
+max_drift_hours <- 3
+
+pbruvs_sites |> 
+  create_agent(label = "Pelagic BRUVS sites QA/QC", tbl_name = "pbruvs_sites") |> 
+  # Uniqueness check
+  rows_distinct(ps_site_id,
+                label = "Site IDs are unique",
+                actions = action_levels(stop_at = 0.001)) |> 
+  # Region validation against lookup table
+  col_vals_in_set(columns = vars(region),
+                  set = valid_regions,
+                  label = "Region matches lookup table",
+                  actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_in_set(columns = vars(subregion), 
+                  set = valid_subregions,
+                  label = "Subregion matches lookup table",
+                  actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  # Geographic bounds validation
+  col_vals_between(columns = vars(latitude),
+                   left = exp_config$lat_min,
+                   right = exp_config$lat_max,
+                   label = "Latitude within bounds",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_between(columns = vars(longitude),
+                   left = exp_config$lon_min, 
+                   right = exp_config$lon_max,
+                   label = "Longitude within bounds",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  # Date validation
+  col_vals_between(columns = vars(date),
+                   left = exp_config$date_bounds[1],
+                   right = exp_config$date_bounds[2], 
+                   label = "Date within expedition period",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  # Critical NAs
+  col_vals_not_null(columns = vars(latitude, longitude),
+                    label = "Coordinates are not missing",
+                    actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_not_null(columns = vars(date),
+                    label = "Date is not missing", 
+                    actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  col_vals_lte(columns = vars(drift_m),
+               value = max_drift_m,
+               label = glue("Drift distance ≤ {max_drift_m}m"),
+               actions = action_levels(warn_at = 0.1, stop_at = 0.2)) |> 
+  col_vals_equal(columns = vars(n_rigs),
+               value = 5,
+               label = glue("# rigs !=  5"),
+               actions = action_levels(warn_at = 0.1, stop_at = 0.2)) |> 
+  # ===== DRIFT TIME VALIDATION =====
+  col_vals_gt(columns = vars(drift_hrs),
+              value = 0,
+              label = "Drift time is positive",
+              actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_lte(columns = vars(drift_hrs),
+               value = max_drift_hours,
+               label = glue("Drift time ≤ {max_drift_hours} hours"),
+               actions = action_levels(warn_at = 0.1, stop_at = 0.2)) |> 
+  # ===== Rig ID VALIDATION =====
+  interrogate()
+```
+
+#### Map
+
+```{r pbruvs-map}
+# Interactive visual map
+
+pbruvs_sites_sf <- pbruvs_sites |>
+  sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
+  distinct(ps_site_id, region, subregion, locality, n_rigs, drift_m, geometry)
+
+mapview::mapview(pbruvs_sites_sf,
+                 zcol = "region",
+                 legend = TRUE,
+                 col.regions = regions_palette,
+                 map.types = "Esri.WorldImagery",
+                 layer.name = "Region",
+                 popup = leafpop::popupTable(pbruvs_sites_sf, 
+                                             zcol = c("ps_site_id", "region", "subregion", "n_rigs", "drift_m"))) |> 
+  leafem::addMouseCoordinates() |> 
+  addFullscreenControl()
+```
+
+#### Summary
+
+```{r}
+pbruvs_sites |> 
+  group_by(region, subregion) |>
+  summarize(n_surveys = n(),
+            n_cams = sum(n_rigs),
+            .groups = "drop") 
+```
+
+### Birds
+
+```{r}
+birds_raw <- read_xlsx(file.path(exp_path, "data/primary/raw/birds/PNG_2024_birds_fieldbook_2024_10_02.xlsx"),
+                        sheet = "transect",
+                       range = cell_cols("A:T")) |>
+  clean_names()
+
+birds_stations <- birds_raw |> 
+  select(-time) |> 
+  rename(leg = exp_leg, 
+         uwa_string = paired_string_id,
+         team_lead = team_member) |> 
+  mutate(exp_id = "PNG_2024",
+         method = "birds",
+         protocol = "transect",
+         ps_station_id = ps_site_id,
+         date = ymd(date),
+         across(c(start_time, stop_time), as_hms),
+         across(c(start_lat, start_lon, stop_lat, stop_lon, distance), as.numeric),
+         duration_hrs = as.numeric(round(difftime(stop_time, start_time, units = "hours"), 2)),
+         linear_dist_m = round(as.numeric(geosphere::distHaversine(matrix(c(start_lon, start_lat), ncol = 2),
+                                                                 matrix(c(stop_lon, stop_lat), ncol = 2))), 2),
+         distance_m = coalesce(distance*1000, linear_dist_m)) |> 
+  select(exp_id, method, protocol, ps_site_id, ps_station_id, region , subregion, locality , date, contains("time"), contains("start_l"), contains("stop_l"), 
+         vessel, duration_hrs, distance_m, uwa_string, in_or_out, notes, everything()) 
+
+birds_sites <- birds_stations |> 
+  mutate(time = start_time, 
+         latitude = start_lat,
+         longitude = start_lon,
+         habitat = case_when(vessel %in% c("Argo", "Rhib") ~ "coastal",
+                             vessel %in% c("Land", "Land/bike") ~ "inland",
+                             TRUE ~ NA_character_)) |>
+  select(all_of(core_site_fields), habitat)
+```
+
+#### Map
+
+```{r birds-map}
+# Interactive visual map
+
+birds_sites_sf <- birds_sites |>
+  filter(!is.na(latitude) & !is.na(longitude)) |>
+  sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
+  distinct(ps_site_id, region, subregion, locality, habitat, geometry)
+
+mapview::mapview(birds_sites_sf,
+                 zcol = "region",
+                 legend = TRUE,
+                 col.regions = regions_palette,
+                 map.types = "Esri.WorldImagery",
+                 layer.name = "Region",
+                 popup = leafpop::popupTable(birds_sites_sf, 
+                                             zcol = c("ps_site_id", "region", "subregion", "habitat"))) |> 
+  leafem::addMouseCoordinates() |> 
+  addFullscreenControl()
+```
+
+### Submersible
+
+```{r}
+sub_raw <- read_xlsx(file.path(exp_path, "data/primary/raw/sub/PNG_2024_sub_metadata.xlsx"),
+                        sheet = "metadata") |>
+  clean_names()
+
+sub_sites <- sub_raw |> 
+  transmute(### Core fields ----
+            exp_id = "PNG_2024",
+            method = "sub",
+            ps_site_id = str_replace(str_replace(ps_station_id, "(\\d+)$", \(x) str_pad(x, 3, pad = "0")), "PNG", "PNG_2024"),
+            region = str_to_title(region),
+            subregion = str_to_title(subregion),
+            locality = str_to_title(locality),
+            date = dmy(date_dd_mm_yyyy),
+            time = as_hms(start_time_local),
+            latitude = start_lat_surface,
+            longitude = start_lon_surface,
+            lead = observer_1,  # assuming primary observer =  lead
+            notes = notes,
+            ### Method-specific fields (sub) ----
+            sub_name = "Argonauta",
+            dive_number = dive_num,
+            depth_max_m = as.numeric(depth_max_m),
+            duration = as_hms(dive_duration),
+            temp_max_depth_c = as.numeric(temp_max_depth_c),
+            observer_1 = observer_1,
+            observer2 = observer_2,
+            pilot = pilot,
+            dive_type = dive_type,
+            collection = FALSE,
+            transect = if_else(transect == "Y", TRUE, FALSE),
+            edna = if_else(edna == "Y", TRUE, FALSE),
+            # Waypoints
+            ## Descent 
+            time_descent = as_hms(start_time_local),
+            lat_descent = start_lat_surface,
+            lon_descent = start_lon_surface,
+            ## Bottom
+            time_on_bottom = NA,
+            lat_on_bottom = NA_real_,
+            lon_on_bottom = NA_real_,
+            ## Off bottom
+            time_off_bottom = NA,
+            lat_off_bottom = NA_real_,
+            lon_off_bottom = NA_real_,
+            ## Surface
+            time_surface = NA,
+            lat_surface = NA_real_,
+            lon_surface = NA_real_) |> 
+  filter(dive_type != "training")
+```
+
+#### Map
+
+```{r sub-map}
+# Interactive visual map
+
+sub_sites_sf <- sub_sites |>
+  filter(!is.na(latitude) & !is.na(longitude)) |>
+  sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
+  distinct(ps_site_id, region, subregion, locality, geometry)
+
+mapview::mapview(sub_sites_sf,
+                 zcol = "region",
+                 legend = TRUE,
+                 col.regions = regions_palette,
+                 map.types = "Esri.WorldImagery",
+                 layer.name = "Region",
+                 popup = leafpop::popupTable(sub_sites_sf, 
+                                             zcol = c("ps_site_id", "region", "subregion"))) |> 
+  leafem::addMouseCoordinates() |> 
+  addFullscreenControl()
+```
+
+### Dropcams
+
+```{r warning = FALSE}
+dscm_raw <- read_xlsx(file.path(exp_path, "data/primary/raw/dscm/PNG_2024_dscm_fieldbook.xlsx"),
+                        sheet = "meta") |>
+  clean_names()
+
+dscm_clean <- dscm_raw |> 
+  transmute(### Core fields ----
+            exp_id = "PNG_2024",
+            method = "dscm",
+            ps_site_id = str_replace(str_replace(ps_station_id, "(\\d+)$", \(x) str_pad(x, 3, pad = "0")), "PNG", "PNG_2024"),
+            region = str_to_title(region),
+            subregion = str_to_title(subregion),
+            locality = NA_character_,
+            date = ymd(date_in),
+            time = as_hms(time_in),
+            latitude = lat_in,
+            longitude = lon_in,
+            team_lead = team_lead,
+            notes = notes,
+            # Method fields
+            extech_exp_id = extech_exp_id,
+            dscm_id = dscm_id,
+            mission_duration = as_hms(mission_duration_hrs),
+            recording_duration = as_hms(recording_time_hrs),
+            bottom_depth_m = round(as.numeric(depth_m),2),
+            bottom_temp_c = round(as.numeric(bottom_temp_c),2),
+            bottom_type = bottom_type,
+            bait_type = bait_type,
+            bait_kg = as.numeric(bait_kg),
+            bait_can = bait_can,
+            ballast_type = ballast_type,
+            ballast_kg = as.numeric(bait_kg),
+            gtr_type = gtr_type,
+            iridium_external_id = iridium_external_id,
+            highlights  =  highlights,
+            # Waypoints
+            time_deploy = as_hms(time_in),
+            lat_deploy = lat_in,
+            lon_deploy = lon_in,
+            time_recovery = as_hms(time_out),
+            lat_recovery = lat_out,
+            lon_recovery = lon_out)
+  
+dscm_sites <- dscm_clean |> 
+  select(all_of(core_site_fields))
+```
+
+#### Summary
+
+```{r}
+dscm_sites_sf <- dscm_sites |>
+  filter(!is.na(longitude)) |> 
+  sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326) |>
+  distinct(ps_site_id, region,  geometry)
+
+mapview::mapview(dscm_sites_sf,
+                 zcol = "region",
+                 legend = TRUE,
+                 col.regions = regions_palette,
+                 map.types = "Esri.WorldImagery",
+                 layer.name = "Region",
+                 popup = leafpop::popupTable(pbruvs_sites_sf, zcol = c("ps_site_id", "region")))
+```
+
+## Overall
+
+```{r}
+method_info <- tribble(
+  ~method,    ~method_name,                    ~description,
+  "uvs",      "Underwater Visual Surveys",    "Dive-based fish & benthic surveys",
+  "edna",     "Environmental DNA",             "Water sampling for species detection", 
+  "sbruvs",   "Seabed BRUVs",                 "Bottom-deployed video surveys",
+  "pbruvs",   "Pelagic BRUVs",                "Drifting midwater video surveys",
+  "birds",    "Seabird Surveys",              "Above-water bird observations",
+  "sub",      "Submersible",                  "Deep-water visual surveys",
+  "dscm",     "Deep-Sea Camera",              "Benthic imaging systems"
+)
+
+bind_rows(uvs_sites  |> select(all_of(core_site_fields)),
+          edna_sites |> select(all_of(core_site_fields)),
+          sbruvs_stations |> rename(time = time_in) |> select(all_of(core_site_fields)),
+          pbruvs_sites |> select(all_of(core_site_fields)),
+          birds_sites |> select(all_of(core_site_fields)),
+          sub_sites |> rename(team_lead = observer_1) |>  select(all_of(core_site_fields)),
+          dscm_sites) |> 
+  group_by(region, method) |> 
+  summarise(n_sites = n_distinct(ps_site_id)) |> 
+  pivot_wider(names_from = region, values_from = n_sites, values_fill = 0) |> 
+  left_join(method_info, by = "method") |> 
+  select(method_name, description, everything(), -method, -description) |> 
+  gt() |> 
+  # Header styling
+  tab_header(
+    title = md("**PNG 2024 Expedition Site Summary**"),
+    subtitle = md("*Sampling effort across regions and methods*")
+  ) |> 
+  sub_zero(
+    columns = where(is.numeric),
+    zero_text = "—"
+  ) |> 
+  tab_style(
+    style = list(
+      cell_fill(color = "#f8f9fa"),
+      cell_text(weight = "bold")
+    ),
+    locations = cells_column_labels()
+  ) |> 
+  tab_options(
+    table.width = pct(90),
+    table.font.size = px(13),
+    heading.title.font.size = px(18),
+    heading.subtitle.font.size = px(14),
+    heading.align = "center",
+    column_labels.font.weight = "bold",
+    row_group.font.weight = "bold",
+    table.border.top.style = "solid",
+    table.border.top.width = px(3),
+    table.border.top.color = "#1976d2",
+    table.border.bottom.style = "solid",
+    table.border.bottom.width = px(2),
+    table.border.bottom.color = "#666666",
+    stub.border.style = "solid",
+    stub.border.width = px(1),
+    stub.border.color = "#cccccc",
+    summary_row.background.color = "#f0f0f0"
+  )
+```

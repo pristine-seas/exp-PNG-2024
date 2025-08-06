@@ -1,0 +1,176 @@
+---
+title: "Exploratory Analysis of Pelagic BRUVS Data"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: right
+    code-fold: true
+    theme: cosmo
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
+options(scipen = 999)
+
+# Hook to format inline numeric expressions with comma separators:
+knitr::knit_hooks$set(inline = function(x) {
+  if (!is.numeric(x)) {
+    # For non-numeric values, just return as character
+    return(as.character(x))
+  }
+  # Format numbers with comma as big.mark, no scientific notation
+  format(x, big.mark = ",", scientific = FALSE)
+})
+
+library(PristineSeasR)
+library(sf)
+library(hms)
+library(readxl)
+library(janitor)
+library(lubridate)
+library(gt)
+library(pointblank)
+library(bigrquery)
+library(leaflet)
+library(leaflet.extras)
+library(glue)
+library(lme4)
+library(lmerTest)   # gives p-values for fixed effects
+library(emmeans)
+library(emmeans)
+library(multcomp)
+library(multcompView)
+library(multcomp)
+library(reactable)
+library(scales)
+library(reactablefmtr)
+library(parameters)
+library(tidyverse)
+library(ggdist)
+
+ggthemr::ggthemr("fresh")
+
+ps_paths <- PristineSeasR::get_sci_drive_paths()
+
+exp_id <- "PNG_2024"
+
+exp_path <- file.path(ps_paths$expeditions, str_replace(exp_id, "_", "-"))
+
+bigrquery::bq_auth(email = "marine.data.science@ngs.org")
+
+bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas")
+```
+
+# Introduction
+
+```{r}
+library(vegan)
+pbruvs_raw <- read_xlsx(file.path(exp_path, "data/primary/raw/pelagics/PNG_2024_pelagics_fieldbook_2024_10_01.xlsx"),
+                        sheet = "Metadata") |>
+  clean_names() 
+
+deployment_regions <- pbruvs_raw |> 
+  select(string, subregion = location) |> 
+  mutate(region = case_when(subregion %in% c("Mussau", "Eloaua", "Emanaus", "Emirau", "Tench") ~ "Murat",
+                            subregion %in% c("Tingwon", "Dunung", "Au", "Tsoilik", "Metovai") ~ "Lovongai",
+                            subregion %in% c("Bipi", "Manus", "Harengan") ~ "Manus",
+                            subregion %in% c("Luf", "Ninigo", "Aua", "Wuvulu") ~ "Western Islands",
+                            TRUE ~ "Other")) |> 
+  distinct()
+```
+
+```{r}
+maxn_mean_matrix <- read_xlsx(file.path(exp_path, "data/primary/processed/pbruvs/", "PNG25 PRIMER TA TB TR All Regions 2025_05_12.xlsx"),
+         sheet = "TA sp", range = "A1:AZ59") |> 
+  pivot_longer(cols = starts_with("PNGP"), names_to = "Site", values_to = "Mean Max N") |> 
+  clean_names() |> 
+  pivot_wider(names_from = "max_n_mean", values_from = "mean_max_n") |> 
+  column_to_rownames("site") |> 
+  mutate_all(as.numeric) 
+
+biomass_mean_matrix <- read_xlsx(file.path(exp_path, "data/primary/processed/pbruvs/", "PNG25 PRIMER TA TB TR All Regions 2025_05_12.xlsx"),
+         sheet = "TB sp", range = "A1:AZ59") |> 
+  pivot_longer(cols = starts_with("PNGP"), names_to = "Site", values_to = "Mean Biomass (g)") |> 
+  clean_names() |> 
+  pivot_wider(names_from = "mean_biomass", values_from = "mean_biomass_g") |> 
+  column_to_rownames("site")|> 
+  mutate_all(as.numeric) 
+
+deployments_meta <- deployment_regions |> 
+  filter(string %in% rownames(biomass_mean_matrix)) |> 
+  arrange(match(string, rownames(biomass_mean_matrix)))
+
+adonis_spp <- adonis2(biomass_mean_matrix ~  region, 
+                          by = "margin",
+                          data = deployments_meta, 
+                          permutations = 999, 
+                          method = "bray")
+```
+
+```{r}
+#| label: fig-spp-nmds
+#| fig-cap: "NMDS of Species Composition with Significant Species Vectors"
+#| fig-width: 10
+#| fig-height: 8
+#| 
+
+spp_matrix_filtered <- biomass_mean_matrix[, apply(biomass_mean_matrix, 2, sd) > 0]
+
+# 1. NMDS on species matrix
+spp_nmds <- metaMDS(sqrt(spp_matrix_filtered), distance = "bray", k = 2, trymax = 100, trace = 0)
+
+# 2. Fit species vectors
+spp_fit <- envfit(spp_nmds, spp_matrix_filtered, permutations = 999)
+
+# 3. Extract significant vectors (p < 0.05)
+spp_vecs <- as.data.frame(scores(spp_fit, display = "vectors"))
+spp_vecs$species <- rownames(spp_vecs)
+spp_vecs$pval <- spp_fit$vectors$pvals[spp_vecs$species]
+spp_vecs$r2 <- spp_fit$vectors$r[spp_vecs$species]
+spp_vecs_sig <- spp_vecs |> filter(pval < 0.05, r2 >= 0.2)
+
+# 4. Extract site coordinates
+spp_coords <- as.data.frame(scores(spp_nmds, display = "sites")) |> 
+  bind_cols(deployments_meta)
+
+region_palette <- c("Murat"           = "#20C997",  
+                    "Lovongai"        = "#F94144",  
+                    "Manus"           = "#577590",
+                    "Western Islands" = "#F9C74F")
+
+# 5. Plot with significant species vectors
+ggplot(spp_coords, aes(x = NMDS1, y = NMDS2, color = region)) +
+  geom_point(size = 3, alpha = 0.8) +
+  stat_ellipse(type = "t", level = 0.68, linetype = "dashed") +
+  geom_segment(data = spp_vecs_sig,
+               aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2),
+               arrow = arrow(length = unit(0.25, "cm")), color = "black") +
+  ggrepel::geom_text_repel(data = spp_vecs_sig, force = 2,
+            aes(x = NMDS1 * 1.2, y = NMDS2 * 1.2, label = species),
+            inherit.aes = FALSE,
+            size = 4) +
+  labs(title = "NMDS Ordination of Pelagic Fish Community Structure",
+       subtitle = glue::glue("Sqrt Biomass | Bray-Curtis dissimilarity | Stress = {round(spp_nmds$stress, 3)}"),
+       caption = "Arrows show functional groups significantly correlated with NMDS axes (p < 0.05, R² > 0.3).\nArrow length reflects correlation strength.",
+       x = "NMDS Axis 1", 
+       y = "NMDS Axis 2",
+       color = "", 
+       shape = "") +
+  coord_equal() +
+  theme(legend.position = "right",
+        legend.box = "vertical",
+        plot.title = element_text(face = "bold", size = 16),
+        plot.subtitle = element_text(size = 13),
+        plot.caption = element_text(size = 10, hjust = 0),
+        axis.title = element_text(face = "bold")) +
+  scale_color_manual(values = region_palette)
+
+ggsave(file.path(exp_path, "figures/pbruvs_biomass_spp_nmds.pdf"), 
+       width = 10, height = 10)
+```
+
+

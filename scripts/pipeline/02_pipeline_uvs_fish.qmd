@@ -57,7 +57,7 @@ stratum_to_suffix <- c("surface"      = "00m",
                        "shallow"      = "10m",
                        "deep"         = "20m")
 
-# Function to assign depth strata labels
+# Function to assign depth strata labels from raw depths in meters
 assign_depth_stratum <- function(avg_depth_m, 
                                  shallow_threshold = 14,
                                  super_shallow_threshold = 6) {

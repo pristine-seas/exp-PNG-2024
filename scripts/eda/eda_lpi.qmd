@@ -107,7 +107,7 @@ region_palette <- c("Murat"           = "#20C997",
 habitat_palette <- c("fore reef"  = "#8BE0D4",  # clearer aqua — more readable than pale cyan
                      "back reef"  = "#E67E7E",  # soft coral red — distinct but not too aggressive
                      "channel"    = "#F4C542",  # golden yellow — fits reef + sand imagery
-                     "patch reef" = "#9370DB"  )
+                     "patch reef" = "#9370DB")
 
 # Custom theme based on nytimes but with normal header casing
 custom_tbl_theme <- reactableTheme(backgroundColor = "#ffffff",
@@ -886,7 +886,7 @@ library(glue)
 nmds_by_taxa <- suppressMessages(
   metaMDS(cover_matrix,
           distance = "bray",
-          k = 3,
+          k = 2,
           trymax = 100,
           autotransform = FALSE,
           noshare = TRUE,
@@ -930,10 +930,10 @@ ggplot() +
                   min.segment.length = 0) +
   stat_ellipse(data = nmds_by_taxa_sites,
                aes(x = NMDS1, y = NMDS2, group = region, color = region),
-               linetype = "dashed", level = 0.75, linewidth = 0.6) +
+               linetype = "dashed", level = 0.68, linewidth = 0.6) +
   scale_color_manual(values = region_palette) +
   labs(title = "NMDS Ordination of Benthic Community Structure",
-       subtitle = glue("Bray–Curtis dissimilarity | Stress = {round(nmds_by_taxa$stress, 3)}"),
+       subtitle = glue("% Cover | Bray–Curtis dissimilarity | Stress = {round(nmds_by_taxa$stress, 3)}"),
        caption = "Arrows indicate morphotaxa significantly correlated with NMDS axes (p < 0.05, R² > 0.3).\nArrow length reflects correlation strength.",
        x = "NMDS Axis 1",
        y = "NMDS Axis 2",
@@ -949,6 +949,9 @@ ggplot() +
         axis.title = element_text(face = "bold"),
         axis.text = element_text(color = "black"),
         panel.grid.major = element_line(color = "gray90"))
+
+ggsave(file.path(exp_path, "figures/uvs_lpi_func_group_nmds.pdf"), 
+       width = 10, height = 10)
 ```
 
 # Functional Group Structure
@@ -1106,9 +1109,9 @@ region_summary <- region_summary |>
 To test for differences in benthic community composition, we ran a PERMANOVA (adonis2) using Bray-Curtis dissimilarities derived from **functional group percent cover**. The model included region, depth_strata, habitat, and exposure as predictors.
 
 ```{r}
+library(vegan)
 #| label: tbl-adonis-fun
 #| tbl-cap: "PERMANOVA results for benthic community composition by functional group (Bray-Curtis dissimilarities)"
-
 
 # 1. Create community matrix (stations × morphotaxa)
 func_cover_matrix <- func_cover_by_station |>
@@ -1236,6 +1239,8 @@ ggplot() +
         plot.caption = element_text(size = 10, hjust = 0),
         axis.title = element_text(face = "bold")) +
   scale_color_manual(values = region_palette)
+
+
 ```
 
 # Indicators of Reef Health

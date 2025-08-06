@@ -78,30 +78,31 @@ sites <- read_rds(file.path(exp_path, "data/primary/processed/sites.rds"))
 
 uvs_sites <- sites$uvs
 
+protected_sites <- read_xlsx(file.path(exp_path, "data/primary/raw/_PNG-2024-uvs-metadata.xlsx")) |> 
+  clean_names() |> 
+   mutate(ps_site_id = str_replace(ps_site_id, "(\\d+)$", ~ str_pad(.x, 3, pad = "0"))) |> 
+select(ps_site_id, in_mpa, mpa_notes)
+
+uvs_sites <- uvs_sites |> 
+  left_join(protected_sites, by = "ps_site_id") 
+
 fish_lut <- tbl(bq_connection, "taxonomy.fish") |> 
   filter(!is.na(accepted_aphia_id)) |> 
   collect()
 
 # -- Read fish survey data -----------------------------------------------
 
-biomass_by_taxa_and_station <- read_csv(file.path(exp_path, "data/primary/output/fish/biomass_by_station_and_taxa.csv"))
+stations <- tbl(bq_connection, "uvs.blt_stations") |> 
+  filter(exp_id == "PNG_2024") |> 
+  collect()
 
-stations <- read_csv(file.path(exp_path, "data/primary/output/fish/station_summary.csv"))
+observations <- tbl(bq_connection, "uvs.blt_observations") |> 
+  filter(exp_id == "PNG_2024") |> 
+  collect()
 
-observations <- read_csv(file.path(exp_path, "data/primary/output/fish/biomass_per_obs.csv"))
-
-# 
-# stations <- tbl(bq_connection, "uvs.blt_stations") |> 
-#   filter(exp_id == "PNG_2024") |> 
-#   collect()
-# 
-# observations <- tbl(bq_connection, "uvs.blt_observations") |> 
-#   filter(exp_id == "PNG_2024") |> 
-#   collect()
-# 
-# biomass_by_taxa_and_station <- tbl(bq_connection, "uvs.blt_biomass_by_taxa") |> 
-#   filter(exp_id == "PNG_2024") |> 
-#   collect()
+biomass_by_taxa_and_station <- tbl(bq_connection, "uvs.blt_biomass_by_taxa") |> 
+  filter(exp_id == "PNG_2024") |> 
+  collect()
 
 # -- Add Zeros back in  --------------------------------------------------
 
@@ -115,16 +116,6 @@ biomass_by_taxa_and_station <- biomass_by_taxa_and_station |>
                        max_length       = NA,
                        density_m2       = 0,
                        biomass_gm2      = 0))
-
-
-# Tmp
-
-stations <- stations |> 
-  mutate(divers = str_replace(divers, "ALG", "Allison Green") |>
-           str_replace("JEC", "Jenn Caselle") |> 
-           str_replace("AMF", "Alan Friedlander") |>
-           str_replace("VAS", "Vyvyan Summers") |>
-           str_replace("AJKM", "Andrew Mcinnis"))
 ```
 
 In total, we conducted surveys at `r n_distinct(stations$ps_site_id)` sites and `r n_distinct(stations$ps_station_id)` stations across `r n_distinct(stations$region)` regions, covering approximately `r sum(stations$survey_area_m2)` m² of reef habitat (@tbl-fish-stations, @fig-map).
@@ -321,6 +312,178 @@ cols_label(n_stations = "Stations",
               table.width = pct(100),
               table.font.size = "small") |> 
   opt_vertical_padding(scale = 0.7)
+```
+
+
+```{r}
+library(tidyverse)
+library(ggdist)
+library(patchwork)
+library(scales)
+
+# Prepare data
+manus_df <- stations |> 
+  select(ps_station_id, region, subregion, avg_taxa, density_m2, biomass_gm2) |> 
+  pivot_longer(cols = c(avg_taxa, density_m2, biomass_gm2),
+               names_to = "metric",
+               values_to = "value") |> 
+  filter(region == "Manus")
+
+# Base plot template
+make_plot <- function(metric_filter, y_label, dot_size = 0.4, binwidth = NULL, halfeye_scale = 0.8, hjust_mean = 1.5, hjust_median = -1) {
+  manus_df |> 
+    filter(metric == metric_filter) |> 
+    ggplot(aes(subregion, value)) +
+    stat_dots(side = "left",
+              binwidth = binwidth,
+              justification = 1.15,
+              show.legend = FALSE,
+              dotsize = dot_size) +
+    geom_boxplot(width = 0.2,
+                 outlier.shape = NA,
+                 alpha = 0.5,
+                 show.legend = FALSE,
+                 color = "black") +
+    stat_halfeye(adjust = 0.4,
+                 scale = halfeye_scale,
+                 justification = -0.12,
+                 .width = 0,
+                 point_colour = NA,
+                 show.legend = FALSE,
+                 alpha = 0.3,
+                 slab_color = NA) +
+    stat_summary(fun = mean,
+                 geom = "text",
+                 aes(label = paste0("μ=", number(..y.., accuracy = 0.1))),
+                 hjust = hjust_mean,
+                 vjust = -0.3,
+                 size = 3,
+                 color = "gray30",
+                 fontface = "italic") +
+    stat_summary(fun = median,
+                 geom = "text",
+                 aes(label = number(..y.., accuracy = 0.1)),
+                 hjust = hjust_median,
+                 size = 3,
+                 color = "black",
+                 fontface = "bold") +
+    labs(x = NULL, y = y_label) +
+    theme_minimal(base_size = 13) +
+    theme(panel.grid.major.x = element_blank(),
+          axis.text.x = element_text(angle = 30, hjust = 1))
+}
+
+# Create individual plots
+plot_a <- make_plot("avg_taxa", "Richness (species/transect)", dot_size = 0.25, halfeye_scale = 0.5, hjust_mean = 1.6, binwidth = 2)
+plot_b <- make_plot("density_m2", "Density (count/m²)", dot_size = 0.5, halfeye_scale = 0.9, hjust_mean = 1.6, binwidth = 0.5)
+plot_c <- make_plot("biomass_gm2", "Biomass (g/m²)", dot_size = 4, halfeye_scale = 1.1, hjust_mean = 1.4, binwidth = 10)
+
+# Combine using patchwork
+
+final_plot <- (plot_a + theme(axis.text.x = element_blank(),
+                              axis.ticks.x = element_blank())) /
+              (plot_b + theme(axis.text.x = element_blank(),
+                              axis.ticks.x = element_blank())) /
+              plot_c +
+  plot_annotation(
+    title = "Reef fish communities in Manus",
+    subtitle = "Species richness, density, and biomass across main islands",
+    tag_levels = 'a'
+  ) &
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0),
+    plot.subtitle = element_text(size = 12, hjust = 0),
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+
+ggsave(file.path(exp_path, "figures/manus_metrics.png"), 
+       final_plot, 
+       width = 8, height = 10, dpi = 300)
+```
+
+```{r}
+library(tidyverse)
+library(ggdist)
+library(patchwork)
+library(scales)
+
+# Main plotting function for any region
+make_region_plot <- function(region_name) {
+  
+  region_df <- stations |> 
+    select(ps_station_id, region, subregion, avg_taxa, density_m2, biomass_gm2) |> 
+    pivot_longer(cols = c(avg_taxa, density_m2, biomass_gm2),
+                 names_to = "metric",
+                 values_to = "value") |> 
+    filter(region == region_name)
+  
+  make_plot <- function(metric_filter, y_label, dot_size = 0.4, binwidth = NULL, halfeye_scale = 0.8, hjust_mean = 1.5, hjust_median = -1) {
+    region_df |> 
+      filter(metric == metric_filter) |> 
+      ggplot(aes(subregion, value)) +
+      stat_dots(side = "left",
+                binwidth = binwidth,
+                justification = 1.15,
+                show.legend = FALSE,
+                dotsize = dot_size) +
+      geom_boxplot(width = 0.2,
+                   outlier.shape = NA,
+                   alpha = 0.5,
+                   show.legend = FALSE,
+                   color = "black") +
+      stat_halfeye(adjust = 0.4,
+                   scale = halfeye_scale,
+                   justification = -0.12,
+                   .width = 0,
+                   point_colour = NA,
+                   show.legend = FALSE,
+                   alpha = 0.3,
+                   slab_color = NA) +
+      stat_summary(fun = mean,
+                   geom = "text",
+                   aes(label = paste0("μ=", number(..y.., accuracy = 0.1))),
+                   hjust = hjust_mean,
+                   vjust = -0.3,
+                   size = 3,
+                   color = "gray30",
+                   fontface = "italic") +
+      stat_summary(fun = median,
+                   geom = "text",
+                   aes(label = number(..y.., accuracy = 0.1)),
+                   hjust = hjust_median,
+                   size = 3,
+                   color = "black",
+                   fontface = "bold") +
+      labs(x = NULL, y = y_label) +
+      theme_minimal(base_size = 13) +
+      theme(panel.grid.major.x = element_blank(),
+            axis.text.x = element_text(angle = 30, hjust = 1))
+  }
+
+  plot_a <- make_plot("avg_taxa", "Richness (species/transect)", dot_size = 0.25, halfeye_scale = 0.5, hjust_mean = 1.6, binwidth = 2)
+  plot_b <- make_plot("density_m2", "Density (count/m²)", dot_size = 0.5, halfeye_scale = 0.9, hjust_mean = 1.6, binwidth = 0.5)
+  plot_c <- make_plot("biomass_gm2", "Biomass (g/m²)", dot_size = 0.5, halfeye_scale = 1.1, hjust_mean = 1.4, binwidth = 10)
+
+  (plot_a + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())) /
+  (plot_b + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())) /
+   plot_c +
+    plot_annotation(
+      title = glue::glue("Reef fish communities in {region_name}"),
+      subtitle = "Species richness, density, and biomass across subregions",
+      tag_levels = 'a'
+    ) &
+    theme(
+      plot.title = element_text(size = 16, face = "bold", hjust = 0),
+      plot.subtitle = element_text(size = 12, hjust = 0),
+      axis.text.x = element_text(angle = 30, hjust = 1)
+    )
+}
+
+final_plot <- make_region_plot("Lovongai")
+
+ggsave(file.path(exp_path, "figures/lovongai_metrics.png"), 
+       final_plot, 
+       width = 14, height = 8, dpi = 300)
 ```
 
 ## Taxonomic summary
@@ -645,7 +808,7 @@ stations |>
 :::
 
 ```{r}
-p <- ggplot(stations, 
+(p <- ggplot(stations, 
        aes(x = factor(region), y = avg_taxa, fill = factor(region))) +
   stat_halfeye(adjust = 0.3,
                justification = -0.12,
@@ -683,7 +846,7 @@ p <- ggplot(stations,
         plot.title = element_text(face = "bold", size = 14),
         plot.title.position = "plot",
         axis.text.y = element_text(size = 12),
-        axis.text.x = element_text(size = 11))
+        axis.text.x = element_text(size = 11)))
 
 ggsave(plot = p, file.path(exp_path, "figures/uvs_fish_richness_by_region.pdf"), width = 10, height = 8)
 ```
@@ -739,7 +902,7 @@ Key findings:
 
 - **Regional differences**: Species richness was modestly influenced by region (χ² = 3.3, p = 0.024).   
 
-  - Estimated marginal means indicate lower richness in Murat (41.4 spp) compared to Lovongai (48.3), Manus (48.3), and the Western Islands (48.4).
+  - Estimated marginal means indicate lower richness in Murat (36.8 spp) compared to Lovongai (43.3), Manus (42.9), and the Western Islands (44.9).
   - The pairwise difference between Murat and Western Islands approached significance (p = 0.055), suggesting a possible regional signal.
 
 ::: {.panel-tabset}
@@ -790,7 +953,6 @@ spp_model_emm_diver |>
 
 ## Biodiversity surveys
 
-
 ```{r}
 bio_obs <- read_xlsx(file.path(exp_path, "data", "primary", "raw", "fish", "PNG_2024_fish_fieldbook_ALG_FINAL.xlsx"),
           sheet = "biodiversity observations") |> 
@@ -826,6 +988,11 @@ new_bio_obs <- bio_aphiaIDs_per_region |>
   anti_join(blt_aphiaIDs_per_region) |> 
   left_join(fish_lut |> distinct(accepted_aphia_id, family, rank)) |> 
   filter(rank == "species")
+
+new_bio_obs |> 
+  filter(!taxon_valid_name %in% taxa_summary$accepted_name)
+
+new_bio_obs |> distinct(taxon_valid_name)
   
 write_csv(new_bio_obs, file.path(exp_path, "data", "primary", "processed", "fish", "additional_taxa_from_bio_surveys.csv"))
 
@@ -917,6 +1084,118 @@ new_bio_obs |>
 ```
 
 :::
+
+
+## Off-survey sightings
+
+```{r}
+all_spp_Manus <- read_xlsx(file.path(exp_path, "reports", "Manus_NW_Islands_fish_species_list.xlsx"),
+                           sheet = "SPECIES LIST",
+                           range = "A2:BK622")
+
+all_spp_Manus <- all_spp_Manus |> 
+  rowwise() |> 
+  rename(taxon = Site) |> 
+  mutate(taxon = str_squish(taxon),
+         row_sum = sum(c_across(where(is.numeric)), na.rm = TRUE)) |> 
+  filter(!is.na(row_sum) & row_sum != 0) |> 
+  select(-row_sum) |> 
+  ungroup()
+
+all_spp_Manus <- all_spp_Manus |> 
+  pivot_longer(cols = -taxon, names_to = "site", values_to = "count") |> 
+  mutate(site_number = as.numeric(str_extract(site, "\\d+$")),
+         region = if_else(site_number <= 60 | site %in% c("Bipi island","Point Stone", "Six Islands Chain, Bipi", "Three Islands, Harengan"),
+                          "Manus", "Western Islands")) |> 
+  replace_na(list(region = "Western Islands")) |> 
+  group_by(region, taxon) |>
+  summarize(total_count = sum(count, na.rm = TRUE),
+            .groups = "drop") |> 
+  pivot_wider(names_from = region, values_from = total_count, values_fill = 0) 
+```
+
+
+```{r aphiaIDs}
+# === 1. Standardize and clean taxon names
+
+all_taxa_clean <- bdc::bdc_clean_names(all_spp_Manus$taxon) |> 
+  distinct(taxon       = scientificName,
+           taxon_clean = names_clean) |> 
+  mutate(across(everything(), str_squish))
+
+# === 2. Prepare names for WoRMS query
+
+clean_names <- all_taxa_clean$taxon_clean |> 
+  unique() |> 
+  na.omit()  # drops NA
+
+batches <- split(clean_names, ceiling(seq_along(clean_names) / 100))
+
+# === 3. Query WoRMS in batches
+
+worms_raw <- purrr::map_dfr(batches, ~worrms::wm_records_names(.x))
+
+# === 4. Extract key fields from WoRMS response
+
+worms_records <- worms_raw |> 
+  select(taxon_clean = scientificname, 
+         rank,
+         aphia_id = AphiaID, 
+         name_status = status, 
+         accepted_name = valid_name, 
+         accepted_aphia_id = valid_AphiaID,
+         family) 
+
+# === 5. Identify and resolve duplicates
+
+worms_dupes <- worms_records |> 
+  get_dupes(taxon_clean)
+
+# Deduplicate: retain best record per taxon_clean
+resolved_taxa <- worms_dupes |> 
+  group_by(taxon_clean) |> 
+  arrange(taxon_clean,
+          desc(name_status == "accepted" | is.na(name_status)),  # accepted or missing treated as better
+          desc(aphia_id == accepted_aphia_id)                    # prefer accepted == AphiaID
+  ) |> 
+  slice_head(n = 1) |> 
+  ungroup()
+
+# === 6. Combine resolved and unique entries
+
+worms_unique <- worms_records |> 
+  anti_join(worms_dupes, by = "taxon_clean")
+
+worms_final <- bind_rows(worms_unique, resolved_taxa) |> 
+  select(-dupe_count)
+
+# === 7. Merge resolved WoRMS metadata back to original taxa
+
+final_taxa <- all_taxa_clean |>
+  left_join(worms_final, by = "taxon_clean") |>
+  mutate(rank = str_to_lower(rank)) |> 
+  select(taxon, taxon_clean, rank, aphia_id, name_status, accepted_name, accepted_aphia_id, family) |>
+  distinct() |>
+  arrange(taxon)
+
+off_transect_taxa <- all_spp_Manus |> 
+  inner_join(final_taxa |> 
+              filter(!is.na(aphia_id),
+                     rank == "species") |> 
+              select(family, taxon, accepted_name, accepted_aphia_id, aphia_id)) |> 
+  filter(!is.na(aphia_id),
+         !accepted_name %in% taxa_summary$accepted_name) |> 
+  arrange(family, taxon) |> 
+  select(family, taxon, accepted_name, Manus, `Western Islands`)
+
+
+off_transect_taxa |> 
+  mutate(across(is.numeric, ~ ifelse(.x > 0, "X", "-"))) |> 
+  select(-taxon) |> 
+  write_csv(file.path(exp_path, "data", "primary", "processed", "fish", "off_transect_taxa.csv"))
+```
+
+Our off-transect observations added `r nrow(off_transect_taxa)` new species to the fish inventory for Manus and the Western Islands. These observations were made during free-swim surveys conducted by Allison Green, Jennifer Caselle, which complemented the standard belt transects.
 
 # Abundance
 
@@ -1407,6 +1686,7 @@ ggplotly(p, tooltip = c("x", "y", "fill")) |>
     y = -0.25,
     title = list(text = "")))
 ```
+
 ```{r}
 # Function to create biomass plot for any region
 
@@ -1571,7 +1851,7 @@ site_biomass_summary <- stations |>
 
 # Step 2: Merge site locations
 site_locations <- uvs_sites |> 
-  distinct(ps_site_id, region, subregion, latitude, longitude)
+  distinct(ps_site_id, region, subregion, latitude, longitude, in_mpa, mpa_notes)
 
 # Step 3: Merge the new trophic data with site metadata
 trophic_map_data <- site_biomass_summary |>
@@ -1618,6 +1898,433 @@ leaflet(data = trophic_map_data) |>
 ```
 
 This section explores the distribution of fish biomass and abundance across major trophic groups, offering insight into the functional structure of reef fish assemblages and potential indicators of ecosystem health.
+
+```{r}
+trophic_colors <- c(
+  "Shark" = "#000000",                # Black
+  "Top Predator" = "#8B0000",         # Dark red
+  "Lower Carnivore" = "#FFA500",      # Orange
+  "Herbivore/Detritivore" = "#228B22", # Green
+  "Planktivore" = "#87CEEB"           # Light blue
+)
+library(scales)
+library(RColorBrewer)
+
+# Prepare data for plotting
+plot_data <- trophic_map_data |>
+  select(region, subregion, in_mpa, ps_site_id, biomass_gm2, starts_with("pct_")) |>
+  # Convert percentages to actual biomass values
+  mutate(biomass_top_predator = biomass_gm2 * pct_top_predator / 100,
+         biomass_shark = biomass_gm2 * pct_shark / 100,
+         biomass_lower_carni = biomass_gm2 * pct_lower_carni / 100,
+         biomass_herbi_detri = biomass_gm2 * pct_herbi_detri / 100,
+         biomass_plankti = biomass_gm2 * pct_plankti / 100) |>
+  # Create a cleaner site label
+  mutate(site_label = str_extract(ps_site_id, "\\d+$")) |>
+  # Pivot to long format for stacking
+  pivot_longer(cols = starts_with("biomass_") & !biomass_gm2,
+               names_to = "trophic_group",
+               values_to = "biomass_value",
+               names_prefix = "biomass_") |>
+  # Clean up trophic group names
+  mutate(trophic_group = case_when(trophic_group == "top_predator" ~ "Top Predator",
+                                   trophic_group == "shark" ~ "Shark",
+                                   trophic_group == "lower_carni" ~ "Lower Carnivore",
+                                   trophic_group == "herbi_detri" ~ "Herbivore/Detritivore",
+                                   trophic_group == "plankti" ~ "Planktivore",
+                                   TRUE ~ trophic_group),
+         # Set factor order for logical stacking
+         trophic_group = factor(trophic_group, 
+                                levels = c("Shark", "Top Predator","Lower Carnivore", "Herbivore/Detritivore", "Planktivore")),
+         subregion = factor(subregion, levels = c("Mussau", "Emirau","Tench", 
+                                                  "Tingwon", "Dunung","Neitab","Kung" , "Au","Tsolik", "Nemto", "Enelava",
+                                                  "Bipi", "Manus","Harengan",
+                                                  "Luf", "Ninigo","Aua", "Wuvulu")),
+         site_label_mpa = ifelse(in_mpa, paste0(site_label, "*"), site_label)) |> 
+  select(region, subregion, in_mpa, ps_site_id, site_label, site_label_mpa, trophic_group, biomass_value)
+
+region_labels <- plot_data %>%
+  distinct(ps_site_id, region) %>%
+  mutate(x = as.numeric(fct_inorder(ps_site_id))) %>%
+  group_by(region) %>%
+  summarise(xmin = min(x), xmax = max(x), xmid = mean(x), .groups = "drop")
+
+site_positions <- plot_data %>%
+  distinct(ps_site_id, region) %>%
+  mutate(x = as.numeric(fct_inorder(ps_site_id)))
+
+region_breaks <- site_positions %>%
+  arrange(x) %>%
+  mutate(region_lag = lag(region)) %>%
+  filter(region != region_lag) %>%
+  pull(x) - 0.5  # place between bars
+
+ggplot(plot_data, 
+       aes(x = site_label_mpa, y = biomass_value, fill = trophic_group)) +
+  geom_col(stat = "identity") +
+  labs(x = NULL, y = "Fish biomass (g/m²)", fill = "Trophic group") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        panel.grid.major.x = element_blank(),
+        legend.position = "top")+
+  annotate("text", x = region_labels$xmid, y = Inf, label = region_labels$region,
+           vjust = -0.5, fontface = "bold", size = 4) +
+  annotate("segment", x = region_labels$xmin, xend = region_labels$xmax,
+           y = Inf, yend = Inf, size = .3, color = "gray20") +
+  coord_cartesian(clip = "off") +
+  theme(plot.margin = margin(10, 10, 30, 10),  # bottom margin for x-axis labels
+        plot.title.position = "plot")+
+   geom_vline(xintercept = region_breaks, color = "black", size = 0.3, linetype = "dashed") +
+  labs(title = "Fish Biomass by Site",
+       subtitle = "Stacked by trophic group - Murat LLG",
+       x = "",
+       y = expression("Biomass (g/m"^2*")"),
+       caption = "* sites in tambu areas or special protections") +
+  scale_fill_manual(values = trophic_colors, name = "Trophic Group") +
+  scale_y_continuous(labels = scales::number_format(accuracy = 1),
+                     expand = expansion(mult = c(0, 0.05))) +
+  labs(title = "Fish Biomass by Site",
+       subtitle = "Stacked by trophic group",
+       x = "",
+       y = expression("Biomass (g/m"^2*")"),
+       caption = "* sites in tambu areas or special protections") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+        plot.subtitle = element_text(size = 11, color = "gray40", margin = margin(b = 15)),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10)),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 9),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.caption = element_text(size = 8, color = "gray50", hjust = 0))
+
+ggsave(file.path(exp_path, "figures/uvs_fish_biomass_by_trophic_group_by_site_All.pdf"), 
+       width = 15, height = 8)
+
+ggplot(plot_data, 
+       aes(x = site_label_mpa, y = biomass_value, fill = trophic_group)) +
+  geom_col(position = "fill") +
+  labs(x = NULL, y = "Proportion of biomass", fill = "Trophic group") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        panel.grid.major.x = element_blank(),
+        legend.position = "top")+
+  annotate("text", x = region_labels$xmid, y = Inf, label = region_labels$region,
+           vjust = -0.5, fontface = "bold", size = 4) +
+  annotate("segment", x = region_labels$xmin, xend = region_labels$xmax,
+           y = Inf, yend = Inf, size = .3, color = "gray20") +
+  coord_cartesian(clip = "off") +
+  theme(plot.margin = margin(10, 10, 30, 10),  # bottom margin for x-axis labels
+        plot.title.position = "plot")+
+  geom_vline(xintercept = region_breaks, color = "black", size = 0.3, linetype = "dashed")+
+  labs(title = "Fish Biomass by Site",
+       subtitle = "Stacked by trophic group - Murat LLG",
+       x = "",
+       y = expression("Biomass (g/m"^2*")"),
+       caption = "* sites in tambu areas or special protections") +
+  scale_fill_manual(values = trophic_colors, name = "Trophic Group") +
+  scale_y_continuous(labels = scales::percent_format(),
+                     expand = expansion(mult = c(0, 0.05)))+
+  labs(title = "Fish Biomass by Site",
+       subtitle = "Stacked by trophic group",
+       x = "",
+       y = expression("Biomass (g/m"^2*")"),
+       caption = "* sites in tambu areas or special protections")+
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+        plot.subtitle = element_text(size = 11, color = "gray40", margin = margin(b = 15)),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10)),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 9),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.caption = element_text(size = 8, color = "gray50", hjust = 0))
+
+ggsave(file.path(exp_path, "figures/uvs_fish_proportional_biomass_by_trophic_group_by_site_All.pdf"), 
+       width = 15, height = 8)
+```
+
+```{r}
+# Create the plot
+plot_data |> 
+  filter(region == "Murat") |> 
+  mutate(subregion = factor(subregion, levels = c("Mussau", "Emirau","Tench")),
+         site_label_mpa = ifelse(in_mpa, paste0(site_label, "*"), site_label))  |> 
+  ggplot(aes(x = site_label_mpa, 
+             y = biomass_value, 
+             fill = trophic_group)) +
+  geom_col(color = "white", size = 0.2) +
+  scale_fill_manual(values = trophic_colors, name = "Trophic Group") +
+  scale_y_continuous(labels = scales::number_format(accuracy = 1),
+                     expand = expansion(mult = c(0, 0.05))) +
+  labs(title = "Fish Biomass by Site",
+       subtitle = "Stacked by trophic group - Murat LLG",
+       x = "",
+       y = expression("Biomass (g/m"^2*")"),
+       caption = "* sites in tambu areas or special protections") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+        plot.subtitle = element_text(size = 11, color = "gray40", margin = margin(b = 15)),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10)),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 9),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.caption = element_text(size = 8, color = "gray50", hjust = 0))+
+  facet_wrap(~subregion, scales = "free_x") 
+
+ggsave(file.path(exp_path, "figures/uvs_fish_biomass_by_trophic_group_by_site_Murat.pdf"), 
+       width = 10, height = 7)
+
+plot_data |> 
+  filter(region == "Murat") |> 
+  mutate(subregion = factor(subregion, levels = c("Mussau", "Emirau","Tench")),
+         site_label_mpa = ifelse(in_mpa, paste0(site_label, "*"), site_label))  |> 
+  ggplot(aes(x = site_label_mpa, 
+             y = biomass_value, 
+             fill = trophic_group)) +
+  geom_col(position = "fill", color = "white", size = 0.2) +
+  scale_fill_manual(values = trophic_colors, name = "Trophic Group") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     expand = expansion(mult = c(0, 0.02))) +
+  labs(title = "Fish Community Composition by Site",
+       subtitle = "Proportional biomass by trophic group - Murat LLG",
+       x = "",
+       y = "Proportion of Total Biomass (%)",
+       caption = "* sites in tambu areas or special protection") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+        plot.subtitle = element_text(size = 11, color = "gray40", margin = margin(b = 15)),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10)),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 9),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.caption = element_text(size = 8, color = "gray50", hjust = 0))+
+  facet_wrap(~subregion, scales = "free_x") 
+
+ggsave(file.path(exp_path, "figures/uvs_fish_proportional_biomass_by_trophic_group_by_site_Murat.pdf"), 
+       width = 10, height = 7)
+```
+
+```{r}
+# Create the plot
+plot_data |> 
+  filter(region == "Lovongai") |> 
+  mutate(subregion = factor(subregion, levels = c("Tingwon", "Dunung","Neitab","Kung" , "Au","Tsolik", "Nemto", "Enelava"))) |> 
+  mutate(site_label_mpa = ifelse(in_mpa, paste0(site_label, "*"), site_label))  |> 
+  ggplot(aes(x = site_label_mpa, 
+             y = biomass_value, 
+             fill = trophic_group)) +
+  geom_col(color = "white", size = 0.2) +
+  scale_fill_manual(values = trophic_colors, name = "Trophic Group") +
+  scale_y_continuous(labels = scales::number_format(accuracy = 1),
+                     expand = expansion(mult = c(0, 0.05))) +
+  labs(title = "Fish Biomass by Site",
+       subtitle = "Stacked by trophic group - Lovongai LLG",
+       x = "",
+       y = expression("Biomass (g/m"^2*")"),
+       caption = "* sites in tambu areas or special protections") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+        plot.subtitle = element_text(size = 11, color = "gray40", margin = margin(b = 15)),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10)),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 9),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.caption = element_text(size = 8, color = "gray50", hjust = 0))+
+  facet_wrap(~subregion, scales = "free_x", nrow = 1) 
+
+ggsave(file.path(exp_path, "figures/uvs_fish_biomass_by_trophic_group_by_site_Lovongai.pdf"), 
+       width = 10, height = 7)
+
+plot_data |> 
+  filter(region == "Lovongai") |> 
+  mutate(subregion = factor(subregion, levels = c("Tingwon", "Dunung","Neitab","Kung" , "Au","Tsolik", "Nemto", "Enelava"))) |> 
+  mutate(site_label_mpa = ifelse(in_mpa, paste0(site_label, "*"), site_label))  |> 
+  ggplot(aes(x = site_label_mpa, 
+             y = biomass_value, 
+             fill = trophic_group)) +
+  geom_col(position = "fill", color = "white", size = 0.2) +
+  scale_fill_manual(values = trophic_colors, name = "Trophic Group") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     expand = expansion(mult = c(0, 0.02))) +
+  labs(title = "Fish Community Composition by Site",
+       subtitle = "Proportional biomass by trophic group - Lovongai LLG",
+       x = "",
+       y = "Proportion of Total Biomass (%)",
+       caption = "* sites in tambu areas or special protection") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+        plot.subtitle = element_text(size = 11, color = "gray40", margin = margin(b = 15)),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10)),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 9),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.caption = element_text(size = 8, color = "gray50", hjust = 0))+
+  facet_wrap(~subregion, scales = "free_x", nrow = 1) 
+
+ggsave(file.path(exp_path, "figures/uvs_fish_proportional_biomass_by_trophic_group_by_site_Lovongai.pdf"), 
+       width = 10, height = 7)
+```
+
+```{r}
+# Create the plot
+plot_data |> 
+  filter(region == "Manus") |> 
+  mutate(subregion = factor(subregion, levels = c("Bipi", "Manus","Harengan"))) |> 
+  mutate(site_label_mpa = ifelse(in_mpa, paste0(site_label, "*"), site_label))  |> 
+  ggplot(aes(x = site_label_mpa, 
+             y = biomass_value, 
+             fill = trophic_group)) +
+  geom_col(color = "white", size = 0.2) +
+  scale_fill_manual(values = trophic_colors, name = "Trophic Group") +
+  scale_y_continuous(labels = scales::number_format(accuracy = 1),
+                     expand = expansion(mult = c(0, 0.05))) +
+  labs(title = "Fish Biomass by Site",
+       subtitle = "Stacked by trophic group - Manus Province",
+       x = "",
+       y = expression("Biomass (g/m"^2*")"),
+       caption = "* sites in tambu areas or special protections") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+        plot.subtitle = element_text(size = 11, color = "gray40", margin = margin(b = 15)),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10)),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 9),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.caption = element_text(size = 8, color = "gray50", hjust = 0))+
+  facet_wrap(~subregion, scales = "free_x", nrow = 1) 
+
+ggsave(file.path(exp_path, "figures/uvs_fish_biomass_by_trophic_group_by_site_Manus.pdf"), 
+       width = 10, height = 7)
+
+plot_data |> 
+  filter(region == "Manus") |> 
+  mutate(subregion = factor(subregion, levels = c("Bipi", "Manus","Harengan"))) |> 
+  mutate(site_label_mpa = ifelse(in_mpa, paste0(site_label, "*"), site_label))  |> 
+  ggplot(aes(x = site_label_mpa, 
+             y = biomass_value, 
+             fill = trophic_group)) +
+  geom_col(position = "fill", color = "white", size = 0.2) +
+  scale_fill_manual(values = trophic_colors, name = "Trophic Group") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     expand = expansion(mult = c(0, 0.02))) +
+  labs(title = "Fish Community Composition by Site",
+       subtitle = "Proportional biomass by trophic group - Manus Province",
+       x = "",
+       y = "Proportion of Total Biomass (%)",
+       caption = "* sites in tambu areas or special protection") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+        plot.subtitle = element_text(size = 11, color = "gray40", margin = margin(b = 15)),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10)),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 9),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.caption = element_text(size = 8, color = "gray50", hjust = 0))+
+  facet_wrap(~subregion, scales = "free_x", nrow = 1) 
+
+ggsave(file.path(exp_path, "figures/uvs_fish_proportional_biomass_by_trophic_group_by_site_Manus.pdf"), 
+       width = 10, height = 7)
+```
+
+```{r}
+# Create the plot
+plot_data |> 
+  filter(region == "Western Islands") |> 
+  mutate(subregion = factor(subregion, levels = c("Luf", "Ninigo","Aua", "Wuvulu"))) |> 
+  mutate(site_label_mpa = ifelse(in_mpa, paste0(site_label, "*"), site_label))  |> 
+  ggplot(aes(x = site_label_mpa, 
+             y = biomass_value, 
+             fill = trophic_group)) +
+  geom_col(color = "white", size = 0.2) +
+  scale_fill_manual(values = trophic_colors, name = "Trophic Group") +
+  scale_y_continuous(labels = scales::number_format(accuracy = 1),
+                     expand = expansion(mult = c(0, 0.05))) +
+  labs(title = "Fish Biomass by Site",
+       subtitle = "Stacked by trophic group - Western Islands - Manus Province",
+       x = "",
+       y = expression("Biomass (g/m"^2*")"),
+       caption = "* sites in tambu areas or special protections") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+        plot.subtitle = element_text(size = 11, color = "gray40", margin = margin(b = 15)),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10)),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 9),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.caption = element_text(size = 8, color = "gray50", hjust = 0))+
+  facet_wrap(~subregion, scales = "free_x", nrow = 1) 
+
+ggsave(file.path(exp_path, "figures/uvs_fish_biomass_by_trophic_group_by_site_WI.pdf"), 
+       width = 10, height = 7)
+
+plot_data |> 
+  filter(region == "Western Islands") |> 
+  mutate(subregion = factor(subregion, levels = c("Luf", "Ninigo","Aua", "Wuvulu"))) |> 
+  mutate(site_label_mpa = ifelse(in_mpa, paste0(site_label, "*"), site_label))  |> 
+  ggplot(aes(x = site_label_mpa, 
+             y = biomass_value, 
+             fill = trophic_group)) +
+  geom_col(position = "fill", color = "white", size = 0.2) +
+  scale_fill_manual(values = trophic_colors, name = "Trophic Group") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     expand = expansion(mult = c(0, 0.02))) +
+  labs(title = "Fish Community Composition by Site",
+       subtitle = "Proportional biomass by trophic group - Western Islands - Manus Province",
+       x = "",
+       y = "Proportion of Total Biomass (%)",
+       caption = "* sites in tambu areas or special protection") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+        plot.subtitle = element_text(size = 11, color = "gray40", margin = margin(b = 15)),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10)),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 9),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.caption = element_text(size = 8, color = "gray50", hjust = 0))+
+  facet_wrap(~subregion, scales = "free_x", nrow = 1) 
+
+ggsave(file.path(exp_path, "figures/uvs_fish_proportional_biomass_by_trophic_group_by_site_WI.pdf"), 
+       width = 10, height = 7)
+```
 
 ::: {.panel-tabset}
 
@@ -1905,17 +2612,19 @@ fig
 We evaluated multivariate differences in trophic structure using PERMANOVA. Depth strata emerged as the strongest predictor of trophic composition (R² = 7.9%, F = 7.20, p = 0.001), followed by region (R² = 3.4%, F = 2.07, p = 0.028). Together, these variables explained ~11% of the total variation, with the remainder attributed to within-region and within-strata heterogeneity.
 
 ```{r}
+library(vegan)
+
 trophic_matrix <- biomass_by_station_and_trophic |>
   select(ps_station_id, trophic_group, pct_biomass) |>
   pivot_wider(names_from = trophic_group, values_from = pct_biomass, values_fill = 0) |>
   column_to_rownames("ps_station_id")
 
 trophic_meta <- biomass_by_station_and_trophic |>
-  distinct(ps_station_id, region, depth_strata) |>
+  distinct(ps_station_id, region, depth_strata, habitat, exposure) |>
   filter(ps_station_id %in% rownames(trophic_matrix)) |> 
   arrange(match(ps_station_id, rownames(trophic_matrix)))
 
-adonis_trophic <- adonis2(trophic_matrix ~  depth_strata + region, 
+adonis_trophic <- adonis2(trophic_matrix ~  depth_strata + region + habitat + exposure, 
                           by = "margin",
                           data = trophic_meta, 
                           permutations = 999, 
@@ -2019,6 +2728,8 @@ ggplot(nmds_coords, aes(x = NMDS1, y = NMDS2, color = region)) +
 A permutational multivariate analysis of variance (PERMANOVA) revealed significant effects of both depth strata and region on species-level fish community structure (Bray-Curtis dissimilarity). Together, they explained approximately 8.2% of the variation in community composition: Depth strata accounted for 3.0% of the variation (F = 2.65, p = 0.001) and	Region explained an additional 5.1% (F = 2.99, p = 0.001),
 
 ```{r}
+library(vegan)
+
 spp_matrix <- biomass_by_taxa_and_station |>
   select(ps_station_id, accepted_name, biomass_gm2) |>
   pivot_wider(names_from = accepted_name, values_from = biomass_gm2, values_fill = 0) |>
@@ -2044,6 +2755,10 @@ adonis_spp <- adonis2(spp_matrix ~  depth_strata + region,
 #| 
 
 spp_matrix_filtered <- spp_matrix[, apply(spp_matrix, 2, sd) > 0]
+spp_matrix_filtered <- spp_matrix_filtered[, colSums(spp_matrix_filtered > 0) > 3]
+
+dim(spp_matrix_filtered)       # stations × trophic groups or taxa
+mean(spp_matrix_filtered == 0) # proportion of zeros
 
 # 1. NMDS on species matrix
 spp_nmds <- metaMDS(log1p(spp_matrix_filtered), distance = "bray", k = 3, trymax = 100, trace = 0)
@@ -2056,31 +2771,48 @@ spp_vecs <- as.data.frame(scores(spp_fit, display = "vectors"))
 spp_vecs$species <- rownames(spp_vecs)
 spp_vecs$pval <- spp_fit$vectors$pvals[spp_vecs$species]
 spp_vecs$r2 <- spp_fit$vectors$r[spp_vecs$species]
-spp_vecs_sig <- spp_vecs |> filter(pval < 0.05, r2 >= 0.2)
+spp_vecs_sig <- spp_vecs |> filter(r2 >= 0.2)
 
 # 4. Extract site coordinates
 spp_coords <- as.data.frame(scores(spp_nmds, display = "sites")) |> 
   bind_cols(spp_meta)
 
+region_palette <- c("Murat"           = "#20C997",  
+                    "Lovongai"        = "#F94144",  
+                    "Manus"           = "#577590",
+                    "Western Islands" = "#F9C74F")
+
 # 5. Plot with significant species vectors
 ggplot(spp_coords, aes(x = NMDS1, y = NMDS2, color = region)) +
-  geom_point(size = 3, alpha = 0.8) +
+  geom_point(aes(shape = depth_strata),size = 3, alpha = 0.8) +
   stat_ellipse(type = "t", level = 0.68, linetype = "dashed") +
   geom_segment(data = spp_vecs_sig,
                aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2),
                arrow = arrow(length = unit(0.25, "cm")), color = "black") +
-  geom_text(data = spp_vecs_sig,
+  ggrepel::geom_text_repel(data = spp_vecs_sig,
             aes(x = NMDS1 * 1.1, y = NMDS2 * 1.1, label = species),
             inherit.aes = FALSE,
             size = 4) +
-  labs(title = "NMDS of Species Composition with Significant Species Vectors",
-       subtitle = paste("Bray-Curtis dissimilarity | Stress =", round(spp_nmds$stress, 3)),
-       caption = "Arrows indicate species strongly associated with NMDS axes (p < 0.05).",
-       x = "NMDS1",
-       y = "NMDS2",
-       color = "Region") +
-  theme(legend.position = "bottom")
+  labs(title = "NMDS Ordination of Reef Fish Community Structure",
+       subtitle = glue::glue("Biomass | Bray-Curtis dissimilarity | Stress = {round(spp_nmds$stress, 3)}"),
+       caption = "Arrows show functional groups significantly correlated with NMDS axes (R² > 0.2).\nArrow length reflects correlation strength.",
+       x = "NMDS Axis 1", 
+       y = "NMDS Axis 2",
+       color = "", 
+       shape = "") +
+  coord_equal() +
+  theme(legend.position = "right",
+        legend.box = "vertical",
+        plot.title = element_text(face = "bold", size = 16),
+        plot.subtitle = element_text(size = 13),
+        plot.caption = element_text(size = 10, hjust = 0),
+        axis.title = element_text(face = "bold")) +
+  scale_color_manual(values = region_palette)
+
+ggsave(file.path(exp_path, "figures/uvs_fish_biomass_spp_nmds.pdf"), 
+       width = 10, height = 8)
 ```
+
 
 ## Species contributions to dissimilarity
 
@@ -2222,6 +2954,5 @@ family_summary_by_region <- biomass_by_station_and_family |>
 write_csv(family_summary_by_region, file.path(exp_path, "data/primary/output/uvs_fish_family_summary_by_region.csv"))
 
 ```
-
 
 

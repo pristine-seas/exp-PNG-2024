@@ -1,0 +1,516 @@
+---
+title: "Home Ranges"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: right
+    code-fold: true
+    theme: cosmo
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
+options(scipen = 999)
+
+# Hook to format inline numeric expressions with comma separators:
+knitr::knit_hooks$set(inline = function(x) {
+  if (!is.numeric(x)) {
+    # For non-numeric values, just return as character
+    return(as.character(x))
+  }
+  # Format numbers with comma as big.mark, no scientific notation
+  format(x, big.mark = ",", scientific = FALSE)
+})
+
+library(PristineSeasR)
+library(sf)
+library(tidyverse)
+library(terra)
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(DBI)
+library(bigrquery)
+
+ps_paths <- PristineSeasR::get_sci_drive_paths()
+
+exp_id <- "PNG_2024"
+
+exp_path <- file.path(ps_paths$expeditions, str_replace(exp_id, "_", "-"))
+
+bigrquery::bq_auth(email = "marine.data.science@ngs.org")
+
+bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas")
+```
+
+# Provincial waters
+
+```{r}
+# Define the optimal CRS for western PNG region
+png_crs <- 32754  # UTM Zone 54S - best for western PNG
+
+# Define western PNG bounding box
+west_png_bbox <- c(xmin = 141.0024, ymin = -1.9645, 
+                   xmax = 145.7393, ymax = 1.4353)
+
+# 1. Load and combine all island data
+gdb_path <- file.path(ps_paths$datasets, "USGSEsriWCMC_GlobalIslands_v3/v10/globalislandsfix.gdb")
+
+all_islands <- bind_rows(mutate(st_read(gdb_path, layer = "USGSEsriWCMC_GlobalIslandsv2_BigIslands"), 
+                                layer_source = "BigIslands"),
+                         mutate(st_read(gdb_path, layer = "USGSEsriWCMC_GlobalIslandsv2_Continents"), 
+                                layer_source = "Continents"),
+                         mutate(st_read(gdb_path, layer = "USGSEsriWCMC_GlobalIslandsv2_SmallIslands"), 
+                                layer_source = "SmallIslands"),
+                         mutate(st_read(gdb_path, layer = "USGSEsriWCMC_GlobalIslandsv2_VerySmallIslands"), 
+                                layer_source = "VerySmallIslands")) 
+
+# 2. Load PNG boundary and transform to consistent CRS
+png_boundary <- st_read(file.path(ps_paths$datasets, 
+                                 "marine-regions/EEZ_land_union_v4_202410/EEZ_land_union_v4_202410.shp")) |> 
+  janitor::clean_names() |> 
+  filter(territory1 == "Papua New Guinea") |> 
+  st_transform(st_crs(all_islands))
+
+# Clip islands to PNG boundary
+png_islands <- all_islands |> st_crop(png_boundary)
+
+png_islands <- st_transform(png_islands, png_crs)
+
+
+png_12nm <- png_islands |> 
+  st_buffer(dist = 22224) |>  # 12nm = 22,224m
+  st_union() |> 
+  st_sf() |> 
+  st_crop(png_boundary)
+
+# 3. Extract western islands (already in UTM 54S)
+bbox_poly <- st_as_sfc(st_bbox(west_png_bbox, crs = st_crs(4326))) |> 
+  st_transform(png_crs)
+
+western_islands <- png_islands |> st_crop(bbox_poly)
+
+# 4. Create dissolved 12nm provincial waters
+provincial_waters <- western_islands |> 
+  st_buffer(dist = 22224) |>  # 12nm = 22,224m
+  st_union() |> 
+  st_sf()
+
+# 5. Get land areas and subtract from provincial waters
+png_land_western <- png_islands |> 
+  st_crop(bbox_poly)
+
+provincial_waters_only <- st_difference(provincial_waters, png_land_western)
+
+# 6. Create zoom window (in UTM coordinates)
+zoom_window <- data.frame(lon = c(141.0024, 146),
+                          lat = c(-1.9645, 1.4353)) |> 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326) |> 
+  st_transform(png_crs)
+
+zoom_coords <- st_coordinates(zoom_window)
+xmin <- min(zoom_coords[,1])
+xmax <- max(zoom_coords[,1])
+ymin <- min(zoom_coords[,2])
+ymax <- max(zoom_coords[,2])
+
+# 7. Visualization with consistent CRS
+ggplot() +
+  geom_sf(data = provincial_waters_only, fill = "lightblue", alpha = 0.7) +
+  geom_sf(data = western_islands, fill = "brown", color = "darkred", size = 0.3) +
+  #coord_sf(xlim = c(xmin, xmax), ylim = c(ymin, ymax), expand = FALSE) +
+  theme_minimal() +
+  labs(title = "Western PNG: Islands and 12nm Provincial Waters",
+       subtitle = "All data in UTM 54S coordinate system")
+```
+
+# Species buffers
+
+```{r}
+# Create species home range buffers (all distances in nautical miles, converted to meters)
+
+buffer_napoleon <- provincial_waters_only |> 
+  st_buffer(dist = (1.15 - 12)*1852) |> 
+  mutate(species = "Napoleon wrasse",
+         dist_m = "2.1 km") |> 
+  select(species, dist_m)
+
+buffer_cownose <- provincial_waters_only |> 
+  st_buffer(dist = (1.45 - 12)*1852) |> 
+  mutate(species = "Cownose ray",
+         dist_m = "2.6 km") |> 
+  select(species, dist_m)
+
+buffer_turtle <- provincial_waters_only |> 
+  st_buffer(dist = (19 - 12)*1852) |> 
+  mutate(species = "Green sea turtle",
+         dist_m = "35 km") |> 
+  select(species, dist_m)
+
+buffer_dolphin <- provincial_waters_only |> 
+  st_buffer(dist = (24.8 - 12)*1852) |> 
+  mutate(species = "Bottlenose dolphin",
+         dist_m = "46 km") |> 
+  select(species, dist_m)
+
+buffer_greyreefs <- provincial_waters_only |> 
+  st_buffer(dist = (35 - 12)*1852) |> 
+  mutate(species = "Grey reef shark",
+         dist_m = "66 km") |> 
+  select(species, dist_m)
+
+buffer_manta <- provincial_waters_only |> 
+  st_buffer(dist = (45 - 12)*1852) |> 
+  mutate(species = "Reef manta",
+         dist_m = "85 km") |> 
+  select(species, dist_m)
+
+buffer_redfoot_booby <- provincial_waters_only |> 
+  mutate(species = "Red-footed booby",
+         dist_m = "86 km") |> 
+  st_buffer(dist = (46 - 12)*1852) |> 
+  select(species, dist_m)
+
+buffer_shearwater <- provincial_waters_only |> 
+  st_buffer(dist = (54 - 12)*1852)|> 
+  mutate(species = "Wedge-tailed shearwater",
+         dist_m = "100 km") |> 
+  select(species, dist_m)
+
+buffer_frigate <- provincial_waters_only |> 
+  st_buffer(dist = (180 - 12)*1852)|> 
+  mutate(species = "Great frigate",
+         dist_m = "334 km") |> 
+  select(species, dist_m)
+  
+buffer_sooty <- provincial_waters_only |> 
+  st_buffer(dist = (240 - 12)*1852)|> 
+   mutate(species = "Sooty tern",
+         dist_m = "440 km") |> 
+  select(species, dist_m)
+
+buffers <- bind_rows(buffer_turtle, buffer_dolphin, buffer_greyreefs, buffer_manta,
+                     buffer_redfoot_booby, buffer_frigate, buffer_sooty) |> 
+  smoothr::smooth(method = "ksmooth",  smoothness = 4) |> 
+  mutate(species = factor(species, levels = c("Green sea turtle",  
+                                              "Bottlenose dolphin",
+                                              "Grey reef shark",     
+                                              "Reef manta",      
+                                              "Red-footed booby",     
+                                              "Great frigate",    
+                                              "Sooty tern"          )))
+```
+
+```{r}
+zoom_window <- data.frame(lon = c(140.5, 153.2),
+                          lat = c(-7, 3.5)) |> 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326) |> 
+  st_transform(png_crs)
+
+zoom_coords <- st_coordinates(zoom_window)
+xmin <- min(zoom_coords[,1])
+xmax <- max(zoom_coords[,1])
+ymin <- min(zoom_coords[,2])
+ymax <- max(zoom_coords[,2])
+
+png_boundary <- st_transform(png_boundary, png_crs)
+
+ggplot() +
+  geom_sf(data = provincial_waters_only, fill = "lightblue", alpha = 0.7) +
+  geom_sf(data = buffers, aes(col = species), fill = "transparent") +
+  geom_sf(data = st_transform(png_boundary, png_crs),
+          fill = "transparent", color = "black", linetype = "dashed") +
+  geom_sf(data = png_islands, col = "transparent", fill = "darkgrey") +
+  geom_sf(data = western_islands, fill = "brown", color = "darkred", size = 0.3) +
+  coord_sf(xlim = c(xmin, xmax), ylim = c(ymin, ymax), expand = FALSE) +
+  theme_minimal() 
+```
+
+```{r}
+booby_box <- buffer_redfoot_booby |> 
+  st_bbox()
+
+# First, let's get the coordinate values
+ymin_val <- booby_box$ymin
+ymax_val <- st_bbox(png_boundary)$ymax 
+xmin_val <- st_bbox(png_boundary)$xmin
+xmax_val <- booby_box$xmax
+
+# Create the polygon using these coordinates
+custom_polygon <- st_polygon(list(matrix(c(xmin_val, ymin_val,    # Bottom-left corner
+                                           xmax_val, ymin_val,    # Bottom-right corner  
+                                           xmax_val, ymax_val,    # Top-right corner
+                                           xmin_val, ymax_val,    # Top-left corner
+                                           xmin_val, ymin_val     # Close the polygon (back to start)
+                                           ), ncol = 2, byrow = TRUE))) |> 
+  st_sfc(crs = png_crs) |> 
+  st_sf() |> 
+  st_intersection(png_boundary |> select(mrgid_eez)) |> 
+  st_difference(provincial_waters_only)
+
+# Visualize to verify
+ggplot() +
+  geom_sf(data = png_boundary, fill = "lightgray", alpha = 0.5) +
+  geom_sf(data = custom_polygon, fill = "transparent", color = "black", linewidth = .1) +
+  geom_sf(data = buffers, aes(color = species), fill = "transparent") +
+  theme_minimal()
+```
+
+```{r}
+st_write(buffers, 
+         file.path(exp_path, "data/primary/processed/western-islands/species_buffers.gpkg"), 
+         delete_dsn = TRUE)
+
+provincial_waters_only |> 
+  st_write(file.path(exp_path, "data/primary/processed/western-islands/12nm_buffer.gpkg"))
+
+png_boundary |> 
+  st_write(file.path(exp_path, "data/primary/processed/png_boundary.gpkg"))
+
+custom_polygon |> 
+  st_write(file.path(exp_path, "data/primary/processed/western-islands/proposal_v1.gpkg"), 
+           delete_dsn = TRUE)
+```
+
+# GFW
+
+```{r}
+png_effort <- tbl(bq_connection, "GFW.binned_effort_by_ssvid_2016_2024") |> 
+  filter(eez == "8324", fishing_hours > 0) |> 
+  group_by(year, eez, lon_bin, lat_bin, flag, gear_type) |> 
+  summarize(n_vessels     = n_distinct(ssvid),
+            fishing_hrs   = sum(fishing_hours, na.rm = T),
+            fishing_KWhrs = sum(engine_power_kw*fishing_hours, na.rm = T)) |> 
+  ungroup() |> 
+  collect()
+
+# Convert to spatial
+
+png_effort_sf <- png_effort |> 
+  st_as_sf(coords = c("lon_bin", "lat_bin"), crs = 4326) |>
+  st_transform(png_crs)
+
+# Define zones
+
+polygons_of_interest <- list( provincial_waters = provincial_waters_only |> 
+    st_union() |> 
+    st_sf(zone = "Provincial Waters (12nm)"),
+  
+  species_buffer = buffer_redfoot_booby |> 
+    st_union() |> 
+    st_sf(zone = "Red-footed Booby Range (46nm)"),
+  
+  custom_boundary = custom_polygon |> 
+    st_union() |> 
+    st_sf(zone = "Custom area"))
+
+# Spatial intersection analysis - assign each point to zones
+effort_with_zones <- png_effort_sf
+
+# Check intersection with each zone using spatial operations
+effort_with_zones$in_provincial_waters <- st_intersects(effort_with_zones, 
+                                                        polygons_of_interest$provincial_waters, 
+                                                        sparse = FALSE)[,1]
+
+effort_with_zones$in_species_buffer <- st_intersects(effort_with_zones, 
+                                                     polygons_of_interest$species_buffer, 
+                                                     sparse = FALSE)[,1]
+
+effort_with_zones$in_custom_boundary <- st_intersects(effort_with_zones, 
+                                                      polygons_of_interest$custom_boundary, 
+                                                      sparse = FALSE)[,1]
+
+effort_with_zones <- effort_with_zones |>
+  mutate(zone_classification = case_when(in_provincial_waters ~ "Provincial_Waters",     # Innermost (12nm)
+                                         in_species_buffer ~ "Species_Buffer",           # Middle (12-46nm) 
+                                         in_custom_boundary ~ "Custom_Boundary",         # Outermost (beyond 46nm)
+                                         TRUE ~ "Outside_All"                            # Beyond all zones
+                                         ))
+effort_df <- effort_with_zones |>
+  st_drop_geometry() |> 
+  select(-in_custom_boundary, -in_provincial_waters, -in_species_buffer)
+```
+
+```{r}
+fleet_sizes <- tbl(bq_connection, "GFW.binned_effort_by_ssvid_2016_2024") |> 
+  filter(eez == "8324", fishing_hours > 0) |> 
+  group_by(flag, gear_type) |> 
+  summarize(n_vessels  = n_distinct(ssvid)) |> 
+  collect()
+
+effort_by_fleet_and_zone <- effort_df |> 
+  group_by(year, flag, gear_type, zone_classification) |>
+  summarize(fishing_hrs = round(sum(fishing_hrs)),
+            .groups = "drop") |> 
+  group_by(year, flag, gear_type) |>
+  mutate(pct_effort = round(fishing_hrs / sum(fishing_hrs) * 100, 2)) |> 
+  ungroup()
+
+effort_by_fleet_and_zone |>
+  group_by(flag, gear_type) |>
+  summarize(total_hours = sum(fishing_hrs),
+            years_active = n_distinct(year),
+            avg_annual_hours = round(total_hours / n_distinct(year)),
+            # Zone distribution (% of total effort)
+            pct_provincial = round(sum(fishing_hrs[zone_classification == "Provincial_Waters"]) / total_hours * 100, 1),
+            pct_buffer = round(sum(fishing_hrs[zone_classification == "Species_Buffer"]) / total_hours * 100, 1), 
+            pct_custom = round(sum(fishing_hrs[zone_classification == "Custom_Boundary"]) / total_hours * 100, 1),
+            pct_outside = round(sum(fishing_hrs[zone_classification == "Outside_All"]) / total_hours * 100, 1)) |> 
+  arrange(desc(total_hours)) |> 
+  left_join(fleet_sizes, by = c("flag", "gear_type")) |> 
+  relocate(n_vessels, .after = gear_type)
+```
+
+```{r}
+effort_by_fleet_and_zone |>
+  group_by(zone_classification) |>
+  summarize(total_fishing_hours = sum(fishing_hrs),
+            unique_fleets = n_distinct(paste(flag, gear_type)),
+            unique_flags = n_distinct(flag),
+            years_with_activity = n_distinct(year),
+            avg_annual_effort = round(total_fishing_hours / n_distinct(year)),
+            .groups = "drop") |> 
+  mutate( pct_total_effort = round(total_fishing_hours / sum(total_fishing_hours) * 100, 1)) |> 
+  arrange(desc(total_fishing_hours))
+
+  
+effort_by_fleet_and_zone |>
+  group_by(gear_type, zone_classification) |>
+  summarize(total_fishing_hours = sum(fishing_hrs),
+            unique_fleets = n_distinct(paste(flag, gear_type)),
+            unique_flags = n_distinct(flag),
+            years_with_activity = n_distinct(year),
+            avg_annual_effort = round(total_fishing_hours / n_distinct(year)),
+            .groups = "drop") |> 
+  group_by(gear_type) |> 
+  mutate( pct_total_effort = round(total_fishing_hours / sum(total_fishing_hours) * 100, 1)) |> 
+  arrange(gear_type, desc(total_fishing_hours)) |> 
+  filter(gear_type %in% c("tuna_purse_seines", "drifting_longlines")) 
+```
+
+```{r}
+effort_ts <- effort_by_fleet_and_zone |>
+  group_by(year, flag, gear_type, zone_classification) |>
+  summarize(total_effort = sum(fishing_hrs), .groups = "drop") |>
+  group_by(year, flag, gear_type) |>
+  mutate(pct_by_year = round(total_effort / sum(total_effort) * 100, 1),
+         total_year_effort = sum(total_effort)) |>
+  ungroup() |>
+  pivot_wider(names_from = zone_classification, 
+              values_from = c(total_effort, pct_by_year),
+              values_fill = 0)
+
+effort_ts |> 
+  select(year,flag,gear_type, starts_with("total_effort_")) |> 
+  pivot_longer(cols = -c(year, flag, gear_type),
+              names_to = "zone_classification", 
+              names_prefix = "total_effort_",
+              values_to = "total_year_effort") |> 
+  filter(flag %in% c("CHN", "JPN", "PNG", "TWN", "FSM", "PHL"), gear_type %in% c("tuna_purse_seines")) |> 
+  ggplot()+
+  geom_line(aes(year, total_year_effort, color = zone_classification))+
+  facet_wrap(~flag, scales = "free_y") 
+```
+
+```{r}
+effort_by_fleet_and_zone |>
+  group_by(zone_classification, flag, gear_type) |>
+  summarize(total_hours = sum(fishing_hrs), .groups = "drop") |>
+  group_by(zone_classification) |>
+  slice_max(total_hours, n = 5) |>
+  mutate(rank_in_zone = row_number()) |>
+  ungroup() |>
+  arrange(zone_classification, rank_in_zone)
+```
+
+```{r}
+tmp_df <- png_effort |> 
+  filter(gear_type == "drifting_longlines") |> 
+  mutate(
+    # Round to nearest 0.1 degree (10th degree resolution)
+    lon_bin_coarse = round(lon_bin * 10) / 10,
+    lat_bin_coarse = round(lat_bin * 10) / 10
+  ) |>
+  group_by(lon_bin_coarse, lat_bin_coarse) |>
+  summarize(fishing_hrs = sum(fishing_hrs, na.rm = TRUE), 
+            .groups = "drop") |>
+  rename(lon_bin = lon_bin_coarse,
+         lat_bin = lat_bin_coarse) |> 
+  filter(fishing_hrs > 1, fishing_hrs < 500)
+
+tmp_df |>
+  ggplot() +
+  geom_raster(aes(lon_bin, lat_bin, fill = fishing_hrs)) +
+  scale_fill_gradientn(name = "Fishing Effort\n(hours)",
+    colors = c("#0B1426", "#1E3A5F", "#4A90A4", "#87CEEB", "#FFD700", "#FF4500", "#8B0000"),
+    na.value = "transparent")+
+  geom_sf(data = st_transform(png_boundary, 4326), 
+          fill = "transparent", color = "black", linetype = "dashed", linewidth = .5)+
+  theme_void() +
+  geom_sf(data = st_transform(png_islands, 4326), fill = "grey", color = "transparent")+
+  geom_sf(data = st_transform(custom_polygon, 4326), fill = "transparent", color = "#38A700", linewidth = .5)+
+  geom_sf(data = st_transform(buffer_redfoot_booby, 4326), fill = "transparent", color = "#3EFF8B", linewidth = .5)+
+  geom_sf(data = st_transform(png_12nm, 4326), fill = "transparent", color = "lightblue", linewidth = .1, linetype = "dashed")+
+  geom_sf(data = st_transform(provincial_waters_only, 4326), fill = "transparent", color = "lightblue", linewidth = .1, linetype = "dashed")+
+  theme(legend.position = "right",
+        legend.background = element_rect(fill = "white", color = "gray90", size = 0.5),
+        legend.title = element_text(size = 11, face = "bold", color = "gray20"),
+        legend.text = element_text(size = 9, color = "gray30"),
+        plot.caption = element_text(size = 9, color = "gray50", hjust = 1))+
+  labs(title = "Drifting Longline Fishing Effort in Papua New Guinea EEZ",
+       subtitle = "Western Islands Conservation Opportunities",
+       caption = "Data: AIS from Global Fishing Watch 2016-2024 | Black: PNG EEZ Boundary | Green: large MPA | Light Green: 45nm Buffer | Blue: Provincial Waters")
+
+ggsave(file.path(exp_path, "figures/png_longlines_and_conservation.pdf"), width = 10, height = 8, dpi = 300)
+```
+
+```{r}
+tmp_df <- png_effort |> 
+  filter(gear_type == "tuna_purse_seines") |> 
+  mutate(
+    # Round to nearest 0.1 degree (10th degree resolution)
+    lon_bin_coarse = round(lon_bin * 10) / 10,
+    lat_bin_coarse = round(lat_bin * 10) / 10
+  ) |>
+  group_by(lon_bin_coarse, lat_bin_coarse) |>
+  summarize(fishing_hrs = sum(fishing_hrs, na.rm = TRUE), 
+            .groups = "drop") |>
+  rename(lon_bin = lon_bin_coarse,
+         lat_bin = lat_bin_coarse) |> 
+  filter(fishing_hrs > 1, fishing_hrs < 300)
+
+tmp_df |>
+  ggplot() +
+  geom_raster(aes(lon_bin, lat_bin, fill = fishing_hrs)) +
+  scale_fill_gradientn(name = "Fishing Effort\n(hours)",
+                       colors = c("#0B1426", "#1E3A5F", "#4A90A4", "#87CEEB", "#FFD700", "#FF4500", "#8B0000"),
+                       na.value = "transparent")+
+  geom_sf(data = st_transform(png_boundary, 4326), 
+          fill = "transparent", color = "black", linetype = "dashed", linewidth = .5)+
+  theme_void() +
+  geom_sf(data = st_transform(png_islands, 4326), fill = "grey", color = "transparent")+
+  geom_sf(data = st_transform(custom_polygon, 4326), fill = "transparent", color = "#38A700", linewidth = .5)+
+  geom_sf(data = st_transform(buffer_redfoot_booby, 4326), fill = "transparent", color = "#3EFF8B", linewidth = .5)+
+  geom_sf(data = st_transform(png_12nm, 4326), fill = "transparent", color = "lightblue", linewidth = .1, linetype = "dashed")+
+  geom_sf(data = st_transform(provincial_waters_only, 4326), fill = "transparent", color = "lightblue", linewidth = .3, linetype = "dashed")+
+  theme(legend.position = "right",
+        legend.background = element_rect(fill = "white", color = "gray90", size = 0.5),
+        legend.title = element_text(size = 11, face = "bold", color = "gray20"),
+        legend.text = element_text(size = 9, color = "gray30"),
+        plot.caption = element_text(size = 9, color = "gray50", hjust = 1))+
+  labs(title = "Tuna Purse Seine Fishing Effort in Papua New Guinea EEZ",
+       subtitle = "Western Islands Conservation Opportunities",
+       caption = "Data: AIS from Global Fishing Watch 2016-2024 | Black: PNG EEZ Boundary | Green: large MPA | Light green: 45nm Buffer | Blue: Provincial Waters (12 n.m.)")
+
+ggsave(file.path(exp_path, "figures/png_purse_seine_and_conservation.pdf"), width = 10, height = 8, dpi = 300)
+```
+
+```{r}
+st_area(st_union(buffer_redfoot_booby)) 
+st_area(st_union(custom_polygon))
+```
+

@@ -67,6 +67,88 @@ bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas"
 # Biomass Waffle
 
 ```{r}
+biomass_by_taxa_and_station <- tbl(bq_connection, "uvs.blt_biomass_by_taxa") |> 
+  filter(exp_id == "PNG_2024") |> 
+  collect()
+
+stations <- tbl(bq_connection, "uvs.blt_stations") |> 
+  filter(exp_id == "PNG_2024") |> 
+  collect()
+```
+
+
+```{r}
+library(waffle)
+
+waffle_df <- stations |> 
+  filter(subregion == "Tingwon") |> 
+  group_by(subregion) |> 
+  summarize(n_stations = n_distinct(ps_station_id),
+            biomass_gm2 = mean(biomass_gm2),
+            across(contains("pct"), mean)) |> 
+  mutate(across(contains("pct"), ~.*biomass_gm2/100)) |> 
+  select(-biomass_gm2) |> 
+  pivot_longer(cols = -c(subregion, n_stations),
+               names_to = c(".value", "trophic_group"),
+               names_pattern = "([a-z]+)_(.*)") |> 
+  rename(biomass_gm2 = pct) |> 
+  mutate(trophic_group = if_else(trophic_group %in% c("top_predator", "shark"), 
+                                 trophic_group, 
+                                 "other")) 
+```
+
+```{r}
+waffle_df |>
+  group_by(trophic_group) |>
+  summarise(biomass_gm2 = sum(biomass_gm2)) |>
+  ungroup() |>
+  mutate(trophic_group = fct_reorder(trophic_group, biomass_gm2)) |>  # Ascending order
+  mutate(trophic_group = fct_rev(trophic_group)) |>  # Then reverse it
+  ggplot(aes(fill = trophic_group, values = biomass_gm2))+
+  geom_waffle(n_rows = 10,
+              size = .2, 
+              flip = F,
+              colour = "white",
+              show.legend = T) +
+  coord_equal() +
+  theme_void()
+```
+
+```{r}
+waffle_df |>
+  group_by(trophic_group) |>
+  summarise(biomass_gm2 = sum(biomass_gm2)) |>
+  ungroup() |>
+  arrange(desc(biomass_gm2)) |>  # Start with largest first
+  mutate(# Create cumulative positions to force order
+    cumsum_biomass = cumsum(biomass_gm2),
+    lag_cumsum = lag(cumsum_biomass, default = 0),
+    # Create new values that will force the right fill order
+    new_values = case_when(trophic_group == "shark" ~ max(cumsum_biomass) + 1,  # Force shark to end
+                           TRUE ~ biomass_gm2
+    )
+  ) |>
+  ggplot(aes(fill = reorder(trophic_group, -new_values),  # Reverse order by new values
+             values = biomass_gm2)) +  # But use original values for size
+  geom_waffle(n_rows = 10,
+              size = .2, 
+              flip = F,
+              colour = "white",
+              show.legend = T) +
+  coord_equal() +
+  theme_void() +
+  guides(fill = guide_legend(title = "",
+                             override.aes = list(size = .5),
+                             keywidth = unit(0.1, "cm"),
+                             keyheight = unit(0.1, "cm"),
+                             nrow = 1,
+                             byrow = TRUE)) +
+  theme(legend.position = "bottom")
+```
+
+###
+
+```{r}
 # Load fish summaries
 
 load(file.path(exp_path, "data/primary/output/fish_summaries.RData"))
