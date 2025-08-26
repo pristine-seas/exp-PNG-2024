@@ -98,6 +98,8 @@ stations <- sbruvs_raw |>
          annotation_status = "pending",
          annotation_code = NA_character_,
          annotation_notes = NA_character_) |> 
+  mutate(ps_station_id = str_replace(ps_station_id, "bruvs", "sbruvs"),
+         ps_site_id = str_replace(ps_site_id, "bruvs", "sbruvs"),) |>
   select(ps_station_id, ps_site_id, exp_id, method, region, subregion, locality, date, time = time_in, 
          latitude, longitude, depth_m, habitat, exposure,  bottom_type, 
          rig_id, left_cam, right_cam, bait, team_lead, video_quality, highlights, field_notes, annotation_partner, annotation_status, annotation_code, annotation_notes) 
