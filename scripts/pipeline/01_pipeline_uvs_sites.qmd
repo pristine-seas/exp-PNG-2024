@@ -73,32 +73,39 @@ This process ensures data integrity prior to analysis and database ingestion.
 
 ## 1. Import and Standardize Fieldbook Data
 
-```{r uvs-import}
-# 1. Import Underwater Visual Surveys (UVS) fieldbook
+```{r}
+uvs_sites_raw  <- read_xlsx(file.path(exp_path, "data/primary/raw/_PNG-2024-uvs-metadata.xlsx")) |> 
+  clean_names() 
 
-uvs_sites <- read_xlsx(file.path(exp_path, "data/primary/raw/_PNG-2024-uvs-metadata.xlsx")) |> 
-  clean_names() |> 
-  rename(date      = dd_mm_yyyy,
-         time      = local_time,
-         latitude  = lat,
-         longitude = lon,
-         site_name = alternative_site_id) |> 
-  mutate(exp_id    = exp_id,
-         method    = "uvs",
-         date      = lubridate::dmy(date),
-         time      = hms::as_hms(time),
-         habitat   = str_to_lower(habitat),
-         exposure  = str_to_lower(exposure),
-         in_mpa    = if_else(in_mpa == "yes", TRUE, FALSE),
-         notes     = str_to_lower(notes),
-         # Standardize site IDs to match database format (3-digit padding)
-         ps_site_id = str_replace_all(ps_site_id, "SLB_UVS", "SLB_2024_uvs"),
-         ps_site_id = str_replace(ps_site_id, "(\\d+)$", ~ str_pad(.x, 3, pad = "0"))) |> 
-  # Arrange columns in logical order
+uvs_sites <- uvs_sites_raw |> 
+  transmute(exp_id = exp_id,
+            method = "uvs",
+            region = str_to_title(region),
+            subregion = str_to_title(location),
+            locality = str_to_title(sublocation), 
+            ps_site_id = str_replace(ps_site_id, "(\\d+)$", ~ str_pad(.x, 3, pad = "0")),
+            date = dmy(dd_mm_yyyy),
+            time = as_hms(local_time),
+            latitude = as.numeric(lat),
+            longitude = as.numeric(lon),
+            habitat   = str_to_lower(habitat),
+            exposure  = str_to_lower(exposure),
+            in_mpa = as.logical(in_mpa),
+            mpa_notes = str_to_sentence(mpa_notes),
+            team_lead = case_when(team_lead == "AMF" ~ "Alan Friedlander",
+                                  team_lead == "AM" ~ "Andrew McInnis",
+                                  team_lead == "JEC" ~ "Jennifer Casselle",
+                                  TRUE ~ team_lead),
+            notes = str_to_sentence(notes),
+            site_name = NA_character_) |> 
   select(ps_site_id, exp_id, method, region, subregion, locality, 
          date, time, latitude, longitude, habitat, exposure, site_name, in_mpa, mpa_notes, team_lead, notes)
 
 uvs_sites$habitat[uvs_sites$habitat == "forereef"] <- "fore_reef"
+uvs_sites$habitat[uvs_sites$habitat == "back reef"] <- "back_reef"
+uvs_sites$habitat[uvs_sites$habitat == "patch reef"] <- "patch_reef"
+uvs_sites$habitat[uvs_sites$habitat == "passage"] <- "channel_pass"
+
 
 # Create regions lookup from actual data for validation
 
@@ -206,17 +213,16 @@ mapview::mapview(uvs_sites_sf,
   leaflet.extras::addFullscreenControl()
 ```
 
-
 ```{r eval = F, include = F}
 plot_uvs_sites_map <- function(region, subregion = NULL, save = FALSE, path = NULL) {
 
   # Filter and transform
   map_data <- uvs_sites_sf |>
   mutate(site_number = str_extract(ps_site_id, "\\d+(?!.*\\d)")) |>
-  filter(region == !!region)
+  filter(region %in% !!region)
 
 if (!is.null(subregion)) {
-  map_data <- filter(map_data, subregion == !!subregion)
+  map_data <- filter(map_data, subregion %in% !!subregion)
 }
 map_data <- st_transform(map_data, 3857)
 
@@ -283,26 +289,8 @@ map_data <- st_transform(map_data, 3857)
   return(p)
 }
 
-plot_uvs_sites_map(region = "Marau", subregion = NULL,
-                   save = TRUE, path = file.path(exp_path, "figures/site_maps/", "uvs_Marau.pdf"))
-
-plot_uvs_sites_map(region = "Three Sisters", subregion = NULL,
-                   save = TRUE, path = file.path(exp_path, "figures/site_maps/", "uvs_Three_sisters.pdf"))
-
-plot_uvs_sites_map(region = "Temotu", subregion = "Tinakula",
-                   save = TRUE, path = file.path(exp_path, "figures/site_maps/", "uvs_Tinakula.pdf"))
-
-plot_uvs_sites_map(region = "Temotu", subregion = "Lata",
-                   save = TRUE, path = file.path(exp_path, "figures/site_maps/", "uvs_Lata.pdf"))
-
-plot_uvs_sites_map(region = "Temotu", subregion = "Reef Islands",
-                   save = TRUE, path = file.path(exp_path, "figures/site_maps/", "uvs_Reef_Islands.pdf"))
-
-plot_uvs_sites_map(region = "Temotu", subregion = "Nukapu",
-                   save = TRUE, path = file.path(exp_path, "figures/site_maps/", "uvs_Nukapu.pdf"))
-
-plot_uvs_sites_map(region = "Temotu", subregion = "Duff Islands",
-                   save = TRUE, path = file.path(exp_path, "figures/site_maps/", "uvs_Duff_Islands.pdf"))
+plot_uvs_sites_map(region = "Western Islands", subregion = "Wuvulu",
+                   save = TRUE, path = file.path(exp_path, "figures/site_maps/", "uvs_WI_Wuvulu.pdf"))
 ```
 
 ## 4. Summary and Export
@@ -318,7 +306,7 @@ uvs_sites |>
   summarize(n_surveys = n(),
             .groups = "drop") |> 
   pivot_wider(names_from = exposure, values_from = n_surveys, values_fill = 0) |> 
-  gt::gt(groupname_col = "leg") |> 
+  gt::gt(groupname_col = "region") |> 
   gt::tab_options(row_group.as_column = T,
                   table.width = pct(80),
                   table.font.size = 12,
@@ -333,7 +321,7 @@ uvs_sites |>
 bq_table_upload(bq_table("pristine-seas", "uvs", "sites"),
                 values = uvs_sites,
                 create_disposition = "CREATE_NEVER",
-                write_disposition = "WRITE_TRUNCATE")
+                write_disposition = "WRITE_APPEND")
 
 write_csv(uvs_sites, file.path(exp_path, "data/primary/output",  "SLB_2024_uvs_sites_clean.csv"))
 ```

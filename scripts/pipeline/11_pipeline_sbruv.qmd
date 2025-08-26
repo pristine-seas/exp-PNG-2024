@@ -16,14 +16,23 @@ execute:
 
 ```{r setup, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
 options(scipen = 999)
-# Hook to format inline numeric expressions with comma separators:
+
+
+# Hook to format inline numeric expressions with comma separators and 1 decimal
 knitr::knit_hooks$set(inline = function(x) {
   if (!is.numeric(x)) {
     # For non-numeric values, just return as character
     return(as.character(x))
   }
-  # Format numbers with comma as big.mark, no scientific notation
-  format(x, big.mark = ",", scientific = FALSE)
+  
+  # Check if it's a whole number or should be treated as one
+  if (x == round(x, 0)) {
+    # Format whole numbers without decimals
+    format(x, big.mark = ",", scientific = FALSE, nsmall = 0)
+  } else {
+    # Format decimal numbers with exactly 1 decimal place
+    format(round(x, 1), big.mark = ",", scientific = FALSE, nsmall = 1)
+  }
 })
 
 library(sf)
@@ -53,10 +62,10 @@ bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas"
 
 exp_config <- list(exp_id      = "PNG_2024",
                    date_bounds = c(as.Date("2024-01-01"), as.Date("2024-12-31")),
-                   lat_min     = -12.0, 
-                   lat_max     = -1.0,  
-                   lon_min     = 140.0, 
-                   lon_max     = 155.0) 
+                   lat_min     = -12.3, 
+                   lat_max     = -5,  
+                   lon_min     = 155, 
+                   lon_max     = 170) 
 ```
 
 This documentation outlines the end-to-end pipeline for processing seabed BRUVS data collected during Pristine Seas expeditions. The pipeline ingests raw field data, standardizes formats, performs taxonomy lookups, applies quality assurance/quality control (QA/QC), computes station-level summaries, and loads the clean data into the Pristine Seas Science Database in BigQuery.
@@ -70,26 +79,28 @@ sbruvs_raw <- read_xlsx(file.path(exp_path, "data/primary/raw/bruvs", "PNG_2024_
   janitor::clean_names() 
 
 stations <- sbruvs_raw |> 
-  rename(time = time_in,
+  rename(ps_site_id = ps_station_id,
+         rig_id = rig,
          left_cam = cam_l,
          right_cam = cam_r,
-         ps_site_id = ps_station_id,
-         field_notes = notes,
-         rig_id = rig) |> 
+         field_notes = notes) |> 
   mutate(exp_id = exp_id, 
+         team_lead = case_when(team_lead == "JSM" ~ "Juan Mayorga",
+                               team_lead == "KM" ~ "Kat Millage"),
+         method = "Seabed BRUVS",
+         bait = "Scomber sp.",
          ps_site_id  =  str_replace(ps_site_id, "(\\d+)$", ~ str_pad(.x, 3, pad = "0")),
          ps_station_id = paste0(ps_site_id, "_", paste0(round(depth_m), "m")),
          date           = lubridate::ymd(date),
-         time           = hms::as_hms(time),
+         time_in           = hms::as_hms(time_in),
          video_quality = NA,
          annotation_partner = "USP",
-         analysis_status = "pending",
-         partner_code = NA_character_,
-         analysis_notes = NA_character_,
-         ) |> 
-  select(ps_station_id, ps_site_id, exp_id, region, subregion, locality, date, time, 
+         annotation_status = "pending",
+         annotation_code = NA_character_,
+         annotation_notes = NA_character_) |> 
+  select(ps_station_id, ps_site_id, exp_id, method, region, subregion, locality, date, time = time_in, 
          latitude, longitude, depth_m, habitat, exposure,  bottom_type, 
-         rig_id, left_cam, right_cam, team_lead, video_quality, highlights, field_notes, annotation_partner, analysis_status, partner_code, analysis_notes) 
+         rig_id, left_cam, right_cam, bait, team_lead, video_quality, highlights, field_notes, annotation_partner, annotation_status, annotation_code, annotation_notes) 
 ```
 
 ## QAQC
@@ -105,6 +116,7 @@ stations |>
             date_range = paste(min(date, na.rm = TRUE), "to", max(date, na.rm = TRUE)),
             regions = paste(sort(unique(region)), collapse = ", "),
             subregions = paste(sort(unique(subregion)), collapse = ", "),
+            bait = paste(sort(unique(bait)), collapse = ", "),
             depth_range_m = paste(min(depth_m, na.rm = TRUE), "-", max(depth_m, na.rm = TRUE))) |> 
   pivot_longer(everything(), names_to = "variable", values_to = "value") 
 ```
@@ -130,60 +142,62 @@ mapview::mapview(stations_sf,
 ### Stations
 
 ```{r}
-regions_lookup_table <- tbl(bq_connection, "uvs.blt_stations") |> 
+uvs_sites <- tbl(bq_connection, "uvs.sites") |> 
   filter(exp_id == "PNG_2024") |> 
-  collect() |> 
-  distinct(region, subregion)
+  collect()
+
+regions_lookup_table <- uvs_sites |> 
+  distinct(region, subregion) 
 
 valid_regions <- unique(regions_lookup_table$region)
 
-valid_subregions <- unique(regions_lookup_table$subregion)
+valid_subregions <- c(unique(regions_lookup_table$subregion), "Metevoi", "Metemin")
 
 stations |> 
   create_agent(label = "Seabed BRUVS stations QA/QC", tbl_name = "stations") |> 
   rows_distinct(ps_site_id,
                 label = "Unique site IDs",
-                actions = action_levels(stop_at = 0.001)) |> 
+                actions = action_levels(stop_at = 0.0001)) |> 
   # Enforce non-missing values for critical columns
   rows_complete(columns = vars(ps_site_id, latitude, longitude, date),
                 label = "Complete rows for key fields",
-                actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+                actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |> 
   # Region validation against lookup table
   col_vals_in_set(columns = vars(region),
                   set = valid_regions,
                   label = "Region in lookup table",
-                  actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+                  actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |>
   col_vals_in_set(columns = vars(subregion), 
                   set = valid_subregions,
                   label = "Subregion in lookup table",
-                  actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+                  actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |>
   # Habitat and exposure validation against allowed vocab
   col_vals_in_set(columns = vars(habitat),
-                  set = allowed_vocab$uvs_habitats,
+                  set = c(allowed_vocab$uvs_habitats,"sand_flat", "estuary", "lagoon"),
                   label = "Valid habitat values",
-                  actions = action_levels(stop_at = 0.1)) |>
+                  actions = action_levels(stop_at = 0.0001)) |>
   col_vals_in_set(columns = vars(exposure),
                   set = allowed_vocab$exposure,
                   label = "Valid exposure values",
-                  actions = action_levels(stop_at = 0.1)) |>
+                  actions = action_levels(stop_at = 0.0001)) |>
   # Critical NAs
   col_vals_not_null(columns = vars(latitude, longitude),
                     label = "Coordinates are not missing",
-                    actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+                    actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |>
   col_vals_not_null(columns = vars(date),
                     label = "Date is not missing", 
-                    actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+                    actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |> 
   # Geographic bounds validation
   col_vals_between(columns = vars(latitude),
                    left = exp_config$lat_min,
                    right = exp_config$lat_max,
                    label = "Latitude within bounds",
-                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+                   actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |>
   col_vals_between(columns = vars(longitude),
                    left = exp_config$lon_min, 
                    right = exp_config$lon_max,
                    label = "Longitude within bounds",
-                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+                   actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |> 
   # Date within expedition range
   col_vals_between(columns = vars(date),
                    left = exp_config$date_bounds[1],
@@ -202,14 +216,14 @@ stations |>
 ## Database integration
 
 ```{r}
-bq_table_upload(x = bq_table("pristine-seas", "sbruv", "stations"),
+bq_table_upload(x = bq_table("pristine-seas", "sBRUVS", "stations"),
                 values = stations,
                 create_disposition = "CREATE_NEVER",
-                write_disposition = "WRITE_TRUNCATE")
+                write_disposition = "WRITE_APPEND")
 ```
 
 ```{r}
-write_csv(stations, file.path(exp_path,    "data/primary/output/sbruv",  "SLB_2024_sbruvs_stations_clean.csv"))
+write_csv(stations, file.path(exp_path,    "data/primary/output/sbruvs",  "PNG_2024_sbruvs_stations_clean.csv"))
 ```
 
 

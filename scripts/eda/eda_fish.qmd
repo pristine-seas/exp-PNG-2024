@@ -1088,7 +1088,7 @@ new_bio_obs |>
 
 ## Off-survey sightings
 
-```{r}
+```{r eval = F}
 all_spp_Manus <- read_xlsx(file.path(exp_path, "reports", "Manus_NW_Islands_fish_species_list.xlsx"),
                            sheet = "SPECIES LIST",
                            range = "A2:BK622")
@@ -1115,7 +1115,7 @@ all_spp_Manus <- all_spp_Manus |>
 ```
 
 
-```{r aphiaIDs}
+```{r aphiaIDs, eval = F}
 # === 1. Standardize and clean taxon names
 
 all_taxa_clean <- bdc::bdc_clean_names(all_spp_Manus$taxon) |> 
@@ -1902,7 +1902,7 @@ This section explores the distribution of fish biomass and abundance across majo
 ```{r}
 trophic_colors <- c(
   "Shark" = "#000000",                # Black
-  "Top Predator" = "#8B0000",         # Dark red
+  "Other Top Predator" = "#8B0000",         # Dark red
   "Lower Carnivore" = "#FFA500",      # Orange
   "Herbivore/Detritivore" = "#228B22", # Green
   "Planktivore" = "#87CEEB"           # Light blue
@@ -1927,7 +1927,7 @@ plot_data <- trophic_map_data |>
                values_to = "biomass_value",
                names_prefix = "biomass_") |>
   # Clean up trophic group names
-  mutate(trophic_group = case_when(trophic_group == "top_predator" ~ "Top Predator",
+  mutate(trophic_group = case_when(trophic_group == "top_predator" ~ "Other Top Predator",
                                    trophic_group == "shark" ~ "Shark",
                                    trophic_group == "lower_carni" ~ "Lower Carnivore",
                                    trophic_group == "herbi_detri" ~ "Herbivore/Detritivore",
@@ -1935,7 +1935,7 @@ plot_data <- trophic_map_data |>
                                    TRUE ~ trophic_group),
          # Set factor order for logical stacking
          trophic_group = factor(trophic_group, 
-                                levels = c("Shark", "Top Predator","Lower Carnivore", "Herbivore/Detritivore", "Planktivore")),
+                                levels = c("Shark", "Other Top Predator","Lower Carnivore", "Herbivore/Detritivore", "Planktivore")),
          subregion = factor(subregion, levels = c("Mussau", "Emirau","Tench", 
                                                   "Tingwon", "Dunung","Neitab","Kung" , "Au","Tsolik", "Nemto", "Enelava",
                                                   "Bipi", "Manus","Harengan",
@@ -2048,6 +2048,35 @@ ggplot(plot_data,
 
 ggsave(file.path(exp_path, "figures/uvs_fish_proportional_biomass_by_trophic_group_by_site_All.pdf"), 
        width = 15, height = 8)
+```
+
+```{r}
+plot_data |> 
+  group_by(region, trophic_group) |> 
+  summarize(biomass_value = median(biomass_value, na.rm = TRUE)) |> 
+  ggplot(aes(x = region, 
+             y = biomass_value, 
+             fill = trophic_group)) +
+  geom_col(position = "fill", color = "white", size = 0.2) +
+  scale_fill_manual(values = trophic_colors, name = "Trophic Group") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     expand = expansion(mult = c(0, 0.02)))+
+  labs(title = "Fish Biomass by Trophic Group",
+       subtitle = "Comparison across regions",
+       x = "",
+       y = "Median % Biomass") +
+  theme_minimal(base_size = 11) +
+  theme(plot.title = element_text(size = 14, face = "bold", margin = margin(b = 5)),
+        plot.subtitle = element_text(size = 11, color = "gray40", margin = margin(b = 15)),
+        axis.title.x = element_text(margin = margin(t = 10)),
+        axis.title.y = element_text(margin = margin(r = 10)),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        legend.position = "bottom",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 9),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.caption = element_text(size = 8, color = "gray50", hjust = 0))
 ```
 
 ```{r}
@@ -2953,6 +2982,315 @@ family_summary_by_region <- biomass_by_station_and_family |>
 
 write_csv(family_summary_by_region, file.path(exp_path, "data/primary/output/uvs_fish_family_summary_by_region.csv"))
 
+```
+
+
+# Regional reference
+
+```{r}
+rmi_refs <- read_csv(file.path(ps_paths$expeditions, "RMI-2023/data/primary/output/fish-surveys/fish_surveys_summary_by_trophic.csv")) |> 
+  mutate(across(where(is.character), str_to_title))
+
+rmi_refs <- rmi_refs |> 
+  group_by(location) |> 
+  summarise(pct_predators = sum(pct_biomass[trophic %in% c("Sharks", "Other Top Predators")])) |> 
+  mutate(exp_id = "RMI-2023",
+         region = str_extract(location, "^[^-]+")) |> 
+  group_by(exp_id, region) |> 
+  summarize(mean_pct_predators = mean(pct_predators, na.rm = TRUE),
+             pct_other = 100 - (mean_pct_predators))
+
+palau_refs <- read_csv(file.path(ps_paths$expeditions, "PLW-2024/data/primary/processed/PLW_2024_fish_surveys_biomass_by_taxa_and_station.csv")) 
+
+palau_sites <- read_csv(file.path(ps_paths$expeditions, "PLW-2024/data/primary/processed/PLW_2024_fish_surveys_metadata.csv")) 
+palau_trophs <- read_csv(file.path(ps_paths$expeditions, "PLW-2024/data/primary/processed/PLW_2024_fish_surveys_taxa_summary.csv")) |> 
+  select(taxon_valid_name, trophic)
+
+palau_refs <- palau_refs |> 
+  left_join(palau_trophs) |> 
+  left_join(palau_sites |> distinct(ps_site_id, location)) |> 
+  group_by(location, ps_site_id, depth_strata, trophic) |>
+  summarize(biomass_gm2 = sum(gr_m2, na.rm = TRUE),
+            .groups = "drop") |> 
+  pivot_wider(names_from = trophic, values_from = biomass_gm2, values_fill = 0, names_prefix = "grm2_") |> 
+  pivot_longer(cols = starts_with("grm2_"),
+               names_to = "trophic_group",
+               values_to = "biomass_gm2") |> 
+  group_by(location, ps_site_id, depth_strata) |> 
+  mutate(pct_biomass = round(100*biomass_gm2/sum(biomass_gm2))) |> 
+  ungroup() |> 
+  group_by(location, ps_site_id, trophic_group) |> 
+  summarize(biomass_gm2 = mean(biomass_gm2, na.rm = TRUE),
+            pct_biomass = mean(pct_biomass, na.rm = TRUE)) |> 
+  group_by(location, trophic_group) |> 
+  summarize(biomass_gm2 = mean(biomass_gm2, na.rm = TRUE),
+            pct_biomass = mean(pct_biomass, na.rm = TRUE),
+            .groups = "drop") |> 
+  mutate(exp_id = "PLW_2024",
+         region = location) |> 
+  group_by(exp_id, region) |> 
+  summarize(mean_pct_predators = round(sum(pct_biomass[trophic_group %in% c("grm2_Top-predator sharks", "grm2_Top-predator")], na.rm = TRUE))) |> 
+mutate(pct_other = 100 - mean_pct_predators)
+
+palau_refs
+```
+
+```{r}
+stations <- tbl(bq_connection, "uvs.blt_stations") |> 
+  filter(!is.na(exp_id)) |> 
+  collect()
+
+data <- stations |> 
+  group_by(exp_id, region) |> 
+  summarize(biomass_gm2 = mean(biomass_gm2),
+            pct_shark = mean(pct_shark),
+            pct_top_predator = mean(pct_top_predator)) |> 
+  mutate(mean_pct_predators = pct_shark + pct_top_predator,
+        pct_other = 100 - (mean_pct_predators)) |> 
+  bind_rows(rmi_refs) |> 
+  bind_rows(palau_refs) |> 
+  ungroup()
+
+
+data |> 
+  add_row(exp_id = "Northern Line Islands", region = "Kingman", mean_pct_predators = 85, pct_other = 15) |> 
+  add_row(exp_id = "Northern Line Islands", region = "Palmyra", mean_pct_predators = 65, pct_other = 100 - 65) |>
+  add_row(exp_id = "Northern Line Islands", region = "Jarvis", mean_pct_predators = 74, pct_other = 100 - 74) |>
+  add_row(exp_id = "Northern Line Islands", region = "Baker", mean_pct_predators = 46, pct_other = 100 - 46) |>
+  add_row(exp_id = "Northern Line Islands", region = "Howland", mean_pct_predators = 54, pct_other = 100 - 54) |>
+  add_row(exp_id = "NWHI", region = "NWHI", mean_pct_predators = 54, pct_other = 100 - 54) |>
+  pivot_longer(cols = c("mean_pct_predators", "pct_other"),
+               names_to = "trophic_group",
+               values_to = "percent") |> 
+  mutate(label = paste(exp_id, region)) |> 
+  ggplot()+
+  geom_col(aes(x = fct_reorder(label,percent, sum), y = percent, fill = trophic_group))+
+  coord_flip()
+```
+
+```{r}
+png_summ
+```
+
+```{r}
+library(tidyverse)
+library(stringr)
+
+# ---- pull & filter (adjust to your schema) ------------------------------
+stations <- tbl(bq_connection, "uvs.blt_stations") %>%
+  filter(!is.na(exp_id)) %>%
+  # Example "recent" filter: last 10 years; replace with your criterion
+  # filter(year >= 2015) %>%
+  # Keep 10 m and 20 m strata only (use your actual field/labels)
+  # filter(depth_strata %in% c("10m","20m")) %>%
+  collect()
+
+# ---- summarize PNG data -------------------------------------------------
+png_summ <- stations %>%
+  group_by(exp_id, region) %>%
+  summarise(
+    biomass_gm2       = mean(biomass_gm2, na.rm = TRUE),
+    pct_shark         = mean(pct_shark, na.rm = TRUE),
+    pct_top_predator  = mean(pct_top_predator, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    mean_pct_predators = pct_shark + pct_top_predator,
+    pct_other          = 100 - mean_pct_predators
+  )
+
+# Ensure reference tables have the same columns (fill missing with NA)
+std_cols <- c("exp_id","region","biomass_gm2","pct_shark","pct_top_predator",
+              "mean_pct_predators","pct_other")
+
+rmi_std   <- rmi_refs   %>% mutate(biomass_gm2 = NA_real_, pct_shark = NA_real_,
+                                   pct_top_predator = NA_real_) %>% select(all_of(std_cols))
+palau_std <- palau_refs %>% mutate(biomass_gm2 = NA_real_, pct_shark = NA_real_,
+                                   pct_top_predator = NA_real_) %>% select(all_of(std_cols))
+
+data <- png_summ %>%
+  bind_rows(rmi_std, palau_std) %>%
+  # Add explicit named references
+  add_row(exp_id = "Northern Line Islands", region = "Kingman",  mean_pct_predators = 85, pct_other = 15) %>%
+  add_row(exp_id = "Northern Line Islands", region = "Palmyra",  mean_pct_predators = 65, pct_other = 35) %>%
+  add_row(exp_id = "Northern Line Islands", region = "Jarvis",   mean_pct_predators = 74, pct_other = 26) %>%
+  add_row(exp_id = "Northern Line Islands", region = "Baker",    mean_pct_predators = 46, pct_other = 54) %>%
+  add_row(exp_id = "Northern Line Islands", region = "Howland",  mean_pct_predators = 54, pct_other = 46) %>%
+  add_row(exp_id = "NWHI",                  region = "NWHI",     mean_pct_predators = 54, pct_other = 46) %>%
+  # Clean & bound
+  mutate(
+    exp_id_clean = str_remove(exp_id, "([_\\-\\s]?\\d{4})$"),
+    mean_pct_predators = pmax(0, pmin(100, mean_pct_predators)),
+    pct_other          = 100 - mean_pct_predators,
+    label              = paste(exp_id_clean, region, sep = " — ")
+  ) %>%
+  distinct(label, .keep_all = TRUE)  # avoid accidental duplicates
+
+# ---- order by predator share (highest at top) ---------------------------
+label_levels <- data %>%
+  arrange(desc(mean_pct_predators)) %>%
+  pull(label)
+
+# ---- long format for plotting ------------------------------------------
+plot_df <- data %>%
+  select(label, mean_pct_predators, pct_other) %>%
+  pivot_longer(
+    c(mean_pct_predators, pct_other),
+    names_to  = "trophic_group",
+    values_to = "percent"
+  ) %>%
+  mutate(
+    trophic_group = recode(trophic_group,
+                           "mean_pct_predators" = "Top predators & sharks",
+                           "pct_other"          = "Other fishes"),
+    label = factor(label, levels = label_levels),
+    is_png = if_else(str_detect(as.character(label), "PNG|Papua New Guinea"), TRUE, FALSE)
+  )
+
+pred_labels <- plot_df %>%
+  filter(trophic_group == "Top predators & sharks") %>%
+  mutate(p_label = scales::percent(percent/100, accuracy = 1))
+
+# ---- plot ---------------------------------------------------------------
+ggplot(plot_df, aes(x = label, y = percent/100, fill = trophic_group)) +
+  geom_col(width = 0.72, color = "white", linewidth = 0.3) +
+  geom_text(data = pred_labels,
+            aes(label = p_label),
+            position = position_stack(vjust = 0.5),
+            size = 3.4, fontface = "bold", color = "white") +
+  coord_flip() +
+  scale_y_continuous(labels = scales::label_percent(accuracy = 1),
+                     expand = expansion(mult = c(0, 0.02))) +
+  scale_fill_manual(
+    values = c("Top predators & sharks" = "#1b9e77",
+               "Other fishes"            = "#d9d9d9"),
+    guide = guide_legend(reverse = TRUE, title = NULL)
+  ) +
+  labs(
+    title    = "Predator & Shark Biomass Share by Region",
+    subtitle = "Bars sorted from highest to lowest predator share",
+    x        = NULL, y = "Share of total fish biomass",
+    caption  = "BLT/UVC means across 10 m and 20 m strata; PNG vs reference sites"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.y = element_blank(),
+    legend.position    = "top",
+    plot.title         = element_text(face = "bold")
+  )
+```
+```{r}
+library(tidyverse)
+library(stringr)
+
+# --- summarise PNG data ---------------------------------------------------
+stations <- tbl(bq_connection, "uvs.blt_stations") %>%
+  filter(!is.na(exp_id)) %>%
+  collect()
+
+png_summ <- stations %>%
+  group_by(exp_id, region) %>%
+  summarise(
+    biomass_gm2       = mean(biomass_gm2, na.rm = TRUE),
+    pct_shark         = mean(pct_shark, na.rm = TRUE),
+    pct_top_predator  = mean(pct_top_predator, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    mean_pct_predators = pct_shark + pct_top_predator,
+    pct_other          = 100 - mean_pct_predators
+  )
+
+# --- bind with reference datasets ----------------------------------------
+std_cols <- c("exp_id","region","biomass_gm2","pct_shark","pct_top_predator",
+              "mean_pct_predators","pct_other")
+
+rmi_std   <- rmi_refs   %>% mutate(biomass_gm2 = NA_real_, pct_shark = NA_real_,
+                                   pct_top_predator = NA_real_) %>% select(all_of(std_cols))
+palau_std <- palau_refs %>% mutate(biomass_gm2 = NA_real_, pct_shark = NA_real_,
+                                   pct_top_predator = NA_real_) %>% select(all_of(std_cols))
+
+data <- png_summ %>%
+  bind_rows(rmi_std, palau_std) %>%
+  add_row(exp_id = "Northern Line Islands", region = "Kingman",  mean_pct_predators = 85, pct_other = 15) %>%
+  add_row(exp_id = "Northern Line Islands", region = "Palmyra",  mean_pct_predators = 65, pct_other = 35) %>%
+  add_row(exp_id = "Northern Line Islands", region = "Jarvis",   mean_pct_predators = 74, pct_other = 26) %>%
+  add_row(exp_id = "Northern Line Islands", region = "Baker",    mean_pct_predators = 46, pct_other = 54) %>%
+  add_row(exp_id = "Northern Line Islands", region = "Howland",  mean_pct_predators = 54, pct_other = 46) %>%
+  add_row(exp_id = "NWHI",                  region = "NWHI",     mean_pct_predators = 54, pct_other = 46) %>%
+  mutate(
+    exp_id_clean = str_remove(exp_id, "([_\\-\\s]?\\d{4})$"),
+    exp_id_clean = recode(exp_id_clean,
+                          "SLB"  = "Solomon Islands",
+                          "PLW"  = "Palau",
+                          "NWHI" = "North Western Hawaiian Islands"),
+    mean_pct_predators = pmax(0, pmin(100, mean_pct_predators)),
+    pct_other          = 100 - mean_pct_predators,
+    label              = if_else(region != "NWHI", paste(exp_id_clean, region, sep = " — "),exp_id_clean),
+    is_png             = str_detect(exp_id_clean, regex("PNG|Papua New Guinea", ignore_case = TRUE))
+  ) %>%
+  distinct(label, .keep_all = TRUE)
+
+# --- order labels by predator % (highest → lowest) -----------------------
+label_levels <- data %>%
+  arrange(desc(mean_pct_predators)) %>%
+  pull(label)
+
+# --- reshape for plotting ------------------------------------------------
+plot_df <- data %>%
+  select(label, mean_pct_predators, pct_other, is_png) %>%
+  pivot_longer(
+    c(mean_pct_predators, pct_other),
+    names_to  = "trophic_group",
+    values_to = "percent"
+  ) %>%
+  mutate(
+    trophic_group = recode(trophic_group,
+                           "mean_pct_predators" = "Top predators & sharks",
+                           "pct_other"          = "Other fishes"),
+    label = factor(label, levels = label_levels)
+  )
+
+pred_labels <- plot_df %>%
+  filter(trophic_group == "Top predators & sharks") %>%
+  mutate(p_label = scales::percent(percent/100, accuracy = 1))
+
+# --- plot -----------------------------------------------------------------
+ggplot(plot_df, aes(x = label, y = percent/100, fill = trophic_group)) +
+  geom_col(width = 0.72, color = "white", linewidth = 0.3) +
+  geom_text(data = pred_labels,
+            aes(label = p_label),
+            position = position_stack(vjust = 0.5),
+            size = 3.4, fontface = "bold", color = "white") +
+  coord_flip() +
+  scale_y_continuous(labels = scales::label_percent(accuracy = 1),
+                     expand = expansion(mult = c(0, 0.02))) +
+  scale_fill_manual(
+    values = c("Top predators & sharks" = "#d95f02",  # New predator color
+               "Other fishes"            = "#d9d9d9"),
+    guide = guide_legend(reverse = TRUE, title = NULL)
+  ) +
+  labs(
+    title    = "Predator & Shark Biomass Share by Region",
+    subtitle = "PNG regions bolded",
+    x        = NULL, y = "Share of total fish biomass",
+    caption = "Reference values — North Western Hawaiian Islands from Friedlander & DeMartini (2002); 
+Northern Line Islands from Sandin et al. (2008); all other values from Pristine Seas expeditions."
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.y = element_text(
+      face = ifelse(levels(plot_df$label) %in% data$label[data$is_png], "bold", "plain")
+    ),
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.y = element_blank(),
+    legend.position    = "top",
+    plot.title         = element_text(face = "bold")
+  )
+
+ggsave(file.path(exp_path, "figures/uvs_fish_biomass_predator_share_by_region.pdf"), 
+       width = 18, height = 12)
 ```
 
 

@@ -81,12 +81,10 @@ png_islands <- all_islands |> st_crop(png_boundary)
 
 png_islands <- st_transform(png_islands, png_crs)
 
-
 png_12nm <- png_islands |> 
   st_buffer(dist = 22224) |>  # 12nm = 22,224m
   st_union() |> 
-  st_sf() |> 
-  st_crop(png_boundary)
+  st_sf() 
 
 # 3. Extract western islands (already in UTM 54S)
 bbox_poly <- st_as_sfc(st_bbox(west_png_bbox, crs = st_crs(4326))) |> 
@@ -249,7 +247,8 @@ custom_polygon <- st_polygon(list(matrix(c(xmin_val, ymin_val,    # Bottom-left 
                                            ), ncol = 2, byrow = TRUE))) |> 
   st_sfc(crs = png_crs) |> 
   st_sf() |> 
-  st_intersection(png_boundary |> select(mrgid_eez)) |> 
+  st_intersection(png_boundary |> 
+                    select(mrgid_eez)) |> 
   st_difference(provincial_waters_only)
 
 # Visualize to verify
@@ -258,6 +257,24 @@ ggplot() +
   geom_sf(data = custom_polygon, fill = "transparent", color = "black", linewidth = .1) +
   geom_sf(data = buffers, aes(color = species), fill = "transparent") +
   theme_minimal()
+
+custom_polygon_1 <- custom_polygon |> 
+  st_union()
+
+tmp <- custom_polygon_1 |> 
+  st_difference(png_12nm) 
+
+plot(tmp)
+
+tmp |> 
+  st_write(file.path(exp_path, "data/primary/processed/western-islands/proposal_v1_cut.gpkg"), 
+           delete_dsn = TRUE)
+
+png_12nm |> 
+  st_difference(png_land_western) |> 
+  st_difference(png_islands) |> 
+  st_write(file.path(exp_path, "data/primary/processed/western-islands/png_12nm.gpkg"), 
+           delete_dsn = TRUE)
 ```
 
 ```{r}
@@ -452,10 +469,10 @@ tmp_df |>
           fill = "transparent", color = "black", linetype = "dashed", linewidth = .5)+
   theme_void() +
   geom_sf(data = st_transform(png_islands, 4326), fill = "grey", color = "transparent")+
-  geom_sf(data = st_transform(custom_polygon, 4326), fill = "transparent", color = "#38A700", linewidth = .5)+
-  geom_sf(data = st_transform(buffer_redfoot_booby, 4326), fill = "transparent", color = "#3EFF8B", linewidth = .5)+
-  geom_sf(data = st_transform(png_12nm, 4326), fill = "transparent", color = "lightblue", linewidth = .1, linetype = "dashed")+
-  geom_sf(data = st_transform(provincial_waters_only, 4326), fill = "transparent", color = "lightblue", linewidth = .1, linetype = "dashed")+
+  geom_sf(data = st_transform(tmp, 4326), fill = "transparent", color = "#3EFF8B", linewidth = .5)+
+  geom_sf(data = st_transform(buffer_redfoot_booby, 4326), fill = "transparent", color = "pink", linewidth = .5)+
+  geom_sf(data = st_transform(png_12nm, 4326), fill = "transparent", color = "lightblue", linewidth = .5)+
+  geom_sf(data = st_transform(provincial_waters_only, 4326), fill = "transparent", color = "lightblue", linewidth = .5)+
   theme(legend.position = "right",
         legend.background = element_rect(fill = "white", color = "gray90", size = 0.5),
         legend.title = element_text(size = 11, face = "bold", color = "gray20"),
@@ -463,7 +480,7 @@ tmp_df |>
         plot.caption = element_text(size = 9, color = "gray50", hjust = 1))+
   labs(title = "Drifting Longline Fishing Effort in Papua New Guinea EEZ",
        subtitle = "Western Islands Conservation Opportunities",
-       caption = "Data: AIS from Global Fishing Watch 2016-2024 | Black: PNG EEZ Boundary | Green: large MPA | Light Green: 45nm Buffer | Blue: Provincial Waters")
+       caption = "Data: AIS from Global Fishing Watch 2016-2024 | Black: PNG EEZ Boundary | Green: large MPA | Pink: 45nm MPA | Blue: Provincial Waters")
 
 ggsave(file.path(exp_path, "figures/png_longlines_and_conservation.pdf"), width = 10, height = 8, dpi = 300)
 ```
@@ -493,10 +510,10 @@ tmp_df |>
           fill = "transparent", color = "black", linetype = "dashed", linewidth = .5)+
   theme_void() +
   geom_sf(data = st_transform(png_islands, 4326), fill = "grey", color = "transparent")+
-  geom_sf(data = st_transform(custom_polygon, 4326), fill = "transparent", color = "#38A700", linewidth = .5)+
-  geom_sf(data = st_transform(buffer_redfoot_booby, 4326), fill = "transparent", color = "#3EFF8B", linewidth = .5)+
-  geom_sf(data = st_transform(png_12nm, 4326), fill = "transparent", color = "lightblue", linewidth = .1, linetype = "dashed")+
-  geom_sf(data = st_transform(provincial_waters_only, 4326), fill = "transparent", color = "lightblue", linewidth = .3, linetype = "dashed")+
+  geom_sf(data = st_transform(tmp, 4326), fill = "transparent", color = "#3EFF8B", linewidth = .5)+
+  geom_sf(data = st_transform(buffer_redfoot_booby, 4326), fill = "transparent", color = "pink", linewidth = .5)+
+  geom_sf(data = st_transform(png_12nm, 4326), fill = "transparent", color = "lightblue", linewidth = .5)+
+  geom_sf(data = st_transform(provincial_waters_only, 4326), fill = "transparent", color = "lightblue", linewidth = .5)+
   theme(legend.position = "right",
         legend.background = element_rect(fill = "white", color = "gray90", size = 0.5),
         legend.title = element_text(size = 11, face = "bold", color = "gray20"),
@@ -504,7 +521,7 @@ tmp_df |>
         plot.caption = element_text(size = 9, color = "gray50", hjust = 1))+
   labs(title = "Tuna Purse Seine Fishing Effort in Papua New Guinea EEZ",
        subtitle = "Western Islands Conservation Opportunities",
-       caption = "Data: AIS from Global Fishing Watch 2016-2024 | Black: PNG EEZ Boundary | Green: large MPA | Light green: 45nm Buffer | Blue: Provincial Waters (12 n.m.)")
+       caption = "Data: AIS from Global Fishing Watch 2016-2024 | Black: PNG EEZ Boundary | Green: large MPA | Pink: 45nm Buffer | Blue: Provincial Waters (12 n.m.)")
 
 ggsave(file.path(exp_path, "figures/png_purse_seine_and_conservation.pdf"), width = 10, height = 8, dpi = 300)
 ```
