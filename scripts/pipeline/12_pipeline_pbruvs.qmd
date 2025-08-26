@@ -1,0 +1,272 @@
+---
+title: "Pelagic BRUVS - Data Pipeline"
+date: today
+format: 
+  html:
+    theme: minty
+    self-contained: true
+    code-fold: true
+    toc: true 
+    toc-depth: 3
+    toc-location: right
+    html-table-processing: none
+execute:
+  fig-width: 10
+---
+
+```{r setup, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
+options(scipen = 999)
+
+# Hook to format inline numeric expressions with comma separators and 1 decimal
+knitr::knit_hooks$set(inline = function(x) {
+  if (!is.numeric(x)) {
+    # For non-numeric values, just return as character
+    return(as.character(x))
+  }
+  
+  # Check if it's a whole number or should be treated as one
+  if (x == round(x, 0)) {
+    # Format whole numbers without decimals
+    format(x, big.mark = ",", scientific = FALSE, nsmall = 0)
+  } else {
+    # Format decimal numbers with exactly 1 decimal place
+    format(round(x, 1), big.mark = ",", scientific = FALSE, nsmall = 1)
+  }
+})
+
+library(sf)
+library(hms)
+library(readxl)
+library(janitor)
+library(lubridate)
+library(gt)
+library(pointblank)
+library(tidyverse)
+library(bigrquery)
+library(leaflet)
+library(leaflet.extras)
+library(ggtext)
+library(PristineSeasR2)
+
+ps_paths <- PristineSeasR2::get_drive_paths()
+
+exp_id <- "PNG_2024"
+
+exp_path <- file.path(ps_paths$expeditions, str_replace(exp_id, "_", "-"))
+
+bigrquery::bq_auth(email = "marine.data.science@ngs.org")
+
+bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas")
+
+exp_config <- list(exp_id      = "PNG_2024",
+                   date_bounds = c(as.Date("2024-01-01"), as.Date("2024-12-31")),
+                   lat_min     = -12.3, 
+                   lat_max     = -5,  
+                   lon_min     = 155, 
+                   lon_max     = 170) 
+
+uvs_sites <- tbl(bq_connection, "uvs.sites") |> 
+  filter(exp_id == "PNG_2024") |> 
+  collect()
+
+regions_lookup_table <- uvs_sites |> 
+  distinct(region, subregion) |> 
+  add_row(region = "Lovongai", subregion = "Metemin") |> 
+  add_row(region = "Lovongai", subregion = "Metevoi") |> 
+  add_row(region = "Lovongai", subregion = "Enelava")
+
+valid_regions <- unique(regions_lookup_table$region)
+
+valid_subregions <- unique(regions_lookup_table$subregion)
+```
+
+This documentation outlines the end-to-end pipeline for processing seabed BRUVS data collected during Pristine Seas expeditions. The pipeline ingests raw field data, standardizes formats, performs taxonomy lookups, applies quality assurance/quality control (QA/QC), computes station-level summaries, and loads the clean data into the Pristine Seas Science Database in BigQuery.
+
+# Metadata
+
+## Stations (Deployments)
+
+```{r}
+pbruvs_raw <- read_xlsx(file.path(exp_path, "data/primary/raw/pelagics", "PNG_2024_pelagics_fieldbook_2024_10_01.xlsx")) |> 
+  janitor::clean_names() |> 
+  filter(!is.na(opcode))
+
+stations <- pbruvs_raw |> 
+  rename(annotation_code = opcode,
+         field_notes     = field_comments,
+         highlights      = species_notes) |> 
+  mutate(exp_id        = exp_id, 
+         team_lead     = case_when(team_lead == "VAS" ~ "Vyvyan Summers",
+                                   team_lead == "CT" ~ "Chris Thompson",
+                                   TRUE ~ team_lead),
+         ps_site_id    =  paste("PNG_2024_pbruvs", str_pad(str_extract(string, "(?<=_)\\d+$"), 3, pad = "0"), sep = "_"),
+         ps_station_id = paste(ps_site_id, paste0("r", rig), sep = "_"),
+         habitat       = NA_character_,
+         exposure      = NA_character_,
+         sublocation = str_to_title(sublocation),
+         location = str_to_title(location),
+         date          = lubridate::ymd(date),
+         time_in       = hms::as_hms(time_in),
+         time_out      = hms::as_hms(time_out),
+         drift_hrs     = as.numeric(round(difftime(time_out, time_in, units = "hours"),2)),
+         longitude_in  = as.numeric(long_in),
+         longitude_out = as.numeric(long_out),
+         latitude_in   = as.numeric(lat_in),
+         latitude_out  = as.numeric(lat_out),
+         annotation_partner = "USP",
+         annotation_status  = "pending",
+         annotation_notes   = NA_character_) |> 
+  left_join(regions_lookup_table,
+            by = c("location" = "subregion")) |> 
+  rename(subregion = location, 
+         locality = sublocation) |> 
+  relocate(region, .before = subregion) |> 
+  mutate(subregion = coalesce(subregion, region)) |> 
+  select(ps_station_id, ps_site_id, exp_id, region, subregion, locality,
+         habitat, exposure, date, 
+         time_in, latitude_in, longitude_in, 
+         time_out, latitude_out, longitude_out, drift_hrs,
+         rig_id = rig, left_cam, right_cam, team_lead,
+         bait, 
+         highlights, field_notes, team_lead, 
+         annotation_partner, annotation_code, annotation_status, annotation_notes)
+```
+
+```{r}
+#| label: tbl-summary-stats
+#| tbl-cap: "sBRUVS Pipeline Summary Statistics"
+
+stations |> 
+  summarize(n_sets        = as.character(n_distinct(ps_site_id)),
+            n_deployments = as.character(n()),
+            date_range    = paste(min(date, na.rm = TRUE), "to", max(date, na.rm = TRUE)),
+            regions       = paste(sort(unique(region)), collapse = ", "),
+            subregions    = paste(sort(unique(subregion)), collapse = ", ")) |> 
+  pivot_longer(everything(), names_to = "variable", values_to = "value") 
+```
+
+```{r map}
+# Interactive visual map
+
+stations_sf <- stations |>
+  filter(!is.na(longitude_in) & !is.na(latitude_in)) |>
+  st_as_sf(coords = c("longitude_in", "latitude_in"), crs = 4326) |>
+  distinct(ps_site_id, region, subregion, locality, geometry)
+
+mapview::mapview(stations_sf,
+                 zcol = "subregion",
+                 legend = TRUE,
+                 map.types = "Esri.WorldImagery",
+                 layer.name = "subregion",
+                 popup = leafpop::popupTable(stations_sf, 
+                                             zcol = c("ps_site_id", "region", "subregion", "locality"))) |> 
+  leafem::addMouseCoordinates() |> 
+  leaflet.extras::addFullscreenControl()
+```
+
+```{r}
+stations |> 
+  create_agent(label = "Pelagic BRUVS stations QA/QC", tbl_name = "stations") |> 
+  rows_distinct(ps_station_id,
+                label = "Unique station IDs",
+                actions = action_levels(stop_at = 0.0001)) |> 
+  # Enforce non-missing values for critical columns
+  rows_complete(columns = vars(ps_site_id, latitude_in, longitude_in, date),
+                label = "Complete rows for key fields",
+                actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |> 
+  # Region validation against lookup table
+  col_vals_in_set(columns = vars(region),
+                  set = valid_regions,
+                  label = "Region in lookup table",
+                  actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |>
+  col_vals_in_set(columns = vars(subregion), 
+                  set = c(valid_subregions,"Marau"),
+                  label = "Subregion in lookup table",
+                  actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |>
+  # Habitat and exposure validation against allowed vocab
+  col_vals_in_set(columns = vars(habitat),
+                  set = c(allowed_vocab$uvs_habitats,"sand_flat"),
+                  label = "Valid habitat values",
+                  actions = action_levels(stop_at = 0.0001)) |>
+  col_vals_in_set(columns = vars(exposure),
+                  set = allowed_vocab$exposure,
+                  label = "Valid exposure values",
+                  actions = action_levels(stop_at = 0.0001)) |>
+  # Critical NAs
+  col_vals_not_null(columns = vars(latitude_in, longitude_in),
+                    label = "Coordinates are not missing",
+                    actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |>
+  col_vals_not_null(columns = vars(date),
+                    label = "Date is not missing", 
+                    actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |> 
+  # Geographic bounds validation
+  col_vals_between(columns = vars(latitude_in),
+                   left = exp_config$lat_min,
+                   right = exp_config$lat_max,
+                   label = "Latitude within bounds",
+                   actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |>
+  col_vals_between(columns = vars(longitude_in),
+                   left = exp_config$lon_min, 
+                   right = exp_config$lon_max,
+                   label = "Longitude within bounds",
+                   actions = action_levels(warn_at = 0.0001, stop_at = 0.05)) |> 
+  # Date within expedition range
+  col_vals_between(columns = vars(date),
+                   left = exp_config$date_bounds[1],
+                   right = exp_config$date_bounds[2], 
+                   label = "Date within expedition period",
+                   actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |> 
+  interrogate()
+```
+
+```{r}
+# Calculate drift
+
+stations <- stations |> 
+  mutate(drift_m =  round(as.numeric(geosphere::distHaversine(matrix(c(longitude_in, latitude_in), ncol = 2),
+                                                                    matrix(c(longitude_out, latitude_out), ncol = 2))), 2)) |> 
+  relocate(drift_m, .after = drift_hrs)
+
+stations |> 
+  ggplot()+
+  geom_histogram(aes(drift_m), bins = 50, fill = "lightblue", color = "black")
+```
+
+## Sites (String)
+
+```{r}
+sites <- stations |> 
+  mutate(method = "Pelagic BRUVS") |> 
+  group_by(ps_site_id, exp_id, method, region, subregion, locality, date, habitat, exposure, bait, team_lead, annotation_partner) |>
+  summarize(time_start = first(time_in, na_rm = T),
+            time_end   = last(time_out, na_rm = T),
+            latitude   = mean(latitude_in, na.rm = T),
+            longitude  = mean(longitude_in, na.rm = T),
+            n_rigs     = n_distinct(ps_station_id),
+            drift_m    = mean(drift_m, na.rm = T),
+            drift_hrs  = mean(drift_hrs, na.rm = T),
+            field_notes = paste(na.omit(unique(field_notes)), collapse = " | "),
+            highlights = paste(na.omit(unique(highlights)), collapse = " | "),
+            .groups = "drop") |> 
+  select(ps_site_id, exp_id, method, region, subregion, locality, date,
+         time_start, time_end, latitude, longitude, habitat, exposure, 
+         n_rigs, drift_m, drift_hrs,
+         bait, team_lead, highlights, field_notes, annotation_partner)
+```
+
+## Database integration
+
+```{r}
+bq_table_upload(x = bq_table("pristine-seas", "pBRUVS", "sites"),
+                values = sites,
+                create_disposition = "CREATE_NEVER",
+                write_disposition = "WRITE_APPEND")
+
+stations <- stations |> 
+  select(-bait)
+
+bq_table_upload(x = bq_table("pristine-seas", "pBRUVS", "stations"),
+                values = stations,
+                create_disposition = "CREATE_NEVER",
+                write_disposition = "WRITE_APPEND")
+```
