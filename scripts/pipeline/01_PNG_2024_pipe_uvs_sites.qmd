@@ -323,6 +323,6 @@ bq_table_upload(bq_table("pristine-seas", "uvs", "sites"),
                 create_disposition = "CREATE_NEVER",
                 write_disposition = "WRITE_APPEND")
 
-write_csv(uvs_sites, file.path(exp_path, "data/primary/output",  "SLB_2024_uvs_sites_clean.csv"))
+write_csv(uvs_sites, file.path(exp_path, "data/primary/output",  "PNG_2024_uvs_sites_clean.csv"))
 ```
 
