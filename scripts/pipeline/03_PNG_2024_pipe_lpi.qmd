@@ -159,7 +159,7 @@ read_lpi_sheet <- function(file_path,
 ```
 
 ```{r}
-quim_lpi <- read_lpi_sheet(file_path = file.path(exp_path, "data/primary/raw/benthos/PNG_2024_lpi_fieldsheet_Quim.xlsx"),
+quim_lpi <- read_lpi_sheet(file_path = file.path(exp_path, "data/primary/raw/benthos/PNG_2024_lpi_fieldsheet_Quim_rev16092025.xlsx"),
                            exp_id   = "PNG_2024",
                            diver    = "Quim Garrabou",
                            section_range = "I3:PG5",
@@ -227,10 +227,7 @@ lpi_stations <- lpi_sections |>
   left_join(uvs_sites |> 
               distinct(ps_site_id, region, subregion, locality, habitat, exposure),
             by = "ps_site_id") |> 
-  select(ps_station_id, ps_site_id, exp_id,              
-         region, subregion, locality, habitat, exposure, 
-         divers = diver, depth_m, depth_strata,          
-         n_transects, survey_dist_m, n_points)
+  select(ps_station_id, ps_site_id, exp_id, region, subregion, locality, habitat, exposure, diver, depth_m, depth_strata, n_transects, survey_dist_m, n_points)
 ```
 
 ```{r}
@@ -257,7 +254,7 @@ station_qaqc
 ```{r}
 # Create final station dataframe
 lpi_stations <- lpi_stations |> 
-  select(ps_station_id, ps_site_id, exp_id, region, subregion, locality, habitat, exposure, divers, depth_m, depth_strata, n_transects, survey_dist_m, n_points)
+  select(ps_station_id, ps_site_id, exp_id, region, subregion, locality, habitat, exposure, diver, depth_m, depth_strata, n_transects, survey_dist_m, n_points)
 ```
 
 Now, lets visualize the distribution of our sampling effort and summarize it by region and subregion to inspect any potential outliers.
@@ -272,7 +269,7 @@ lpi_sites_sf <- uvs_sites |>
   inner_join(
     lpi_stations |> 
       group_by(ps_site_id) |> 
-      summarize(team = paste(unique(divers), collapse = "/"),
+      summarize(diver = paste(unique(diver), collapse = "/"),
                 strata = paste(unique(paste(depth_strata, " (", depth_m, "m)", sep = "")), 
                                collapse = "\n"),
                 survey_dist = sum(survey_dist_m),
@@ -289,7 +286,7 @@ mapview::mapview(lpi_sites_sf,
                  map.types = "Esri.WorldImagery",
                  layer.name = "Exposure",
                  popup = leafpop::popupTable(lpi_sites_sf, 
-                                             zcol = c("ps_site_id", "strata", "team", "survey_dist", "habitat", "exposure"))) |> 
+                                             zcol = c("ps_site_id", "strata", "diver", "survey_dist", "habitat", "exposure"))) |> 
   leafem::addMouseCoordinates() |> 
   addFullscreenControl()
 ```
@@ -342,7 +339,7 @@ lpi_contacts$group[str_detect(lpi_contacts$morphotaxon, regex("\\b(Heliopora|Tub
 
 lpi_contacts <- lpi_contacts |> 
   left_join(lpi_stations |> 
-              select(ps_station_id, exp_id, diver = divers, depth_m)) |> 
+              select(ps_station_id, exp_id, diver, depth_m)) |> 
   left_join(lpi_sections |> 
               select(section_id, transect_label, transect_section = section)) |> 
   group_by(ps_station_id, exp_id, diver, depth_m, transect_label, transect_section, group, morphotaxon, field_name, section_id) |> 
@@ -461,8 +458,9 @@ section_alignment <- lpi_sections |>
                            lpi_coral_pts ==  0 & coral_pts  ==  0  ~ "normal",
                            # LPI data only (these become "Scleractinia")
                            lpi_coral_pts > 0   & (is.na(coral_pts) | coral_pts == 0)   ~ "lpi_only",
+                           # When coral diver has pts but lpi diver does not, we turn to off transect obs
                            lpi_coral_pts == 0  & coral_pts > 0        ~ "off transect",
-                           is.na(lpi_coral_pts)  & !is.na(coral_pts)  ~ "specialist_only"),
+                           is.na(lpi_coral_pts)  & !is.na(coral_pts) & coral_pts > 0   ~ "specialist_only"),
          diff = lpi_coral_pts - coral_pts)
 
 normal_section_ids <- section_alignment$section_id[section_alignment$match == "normal"]
@@ -472,6 +470,7 @@ section_alignment |>
   summarize(n_sections = n_distinct(section_id),
             n_pts = sum(lpi_coral_pts, na.rm = T))
 ```
+
 
 ```{r}
 taxa_proportions <- coral_contacts |> 
@@ -531,8 +530,6 @@ complete_lpi_data <- bind_rows(lpi_contacts_non_coral,           # All non-coral
   select(section_id, everything()) |> 
   filter(contacts > 0 | transect_section == "Off")
 
-lpi_stations
-
 divers_per_station <- complete_lpi_data |> 
   ungroup() |> 
   group_by(ps_station_id) |> 
@@ -540,7 +537,7 @@ divers_per_station <- complete_lpi_data |>
   ungroup()
 
 lpi_stations <- lpi_stations |> 
-  select(-divers, -lpi_pct_coral, -lpi_coral_pts) |> 
+  select(-diver, -lpi_pct_coral, -lpi_coral_pts) |> 
   left_join(divers_per_station) |> 
   relocate(divers, .after = locality)
 ```
@@ -751,7 +748,6 @@ clean_lpi <- lpi_observations |>
 clean_lpi <- clean_lpi |> 
   mutate(functional_group = case_when(morphotaxon %in% c("Barren", "Sediment", "Coral rubble") ~ "sediment|rubble|barren", 
                                       morphotaxon == "Turf" ~ "turf",
-                                      functional_group == "Hard coral" ~ "hard_coral",
                                       morphotaxon == "Hard coral - bleached" ~ "hard_coral",
                                       morphotaxon == "Hard coral - dead" ~ "hard_coral_dead",
                                       morphotaxon == "EAM - Epilithic Algal Matrix" ~ "eam",
@@ -767,6 +763,19 @@ clean_lpi |>
             .groups = "drop") |> 
   mutate(pct_contacts = round(100*contacts/sum(contacts), 2)) |> 
   arrange(desc(pct_contacts)) 
+```
+
+
+```{r}
+clean_lpi |> 
+  group_by(ps_station_id, transect_section) |> 
+  summarize(pct_coral = sum(contacts[functional_group == "hard_coral"], na.rm = TRUE)) |> 
+  left_join(lpi_contacts |> 
+              group_by(ps_station_id, transect_section) |>
+              summarise(lpi_coral_pts = sum(contacts[morphotaxon == "Hard coral"], na.rm = TRUE),
+                        .groups       = "drop")) |> 
+  mutate_if(is.numeric, round) |> 
+  filter(abs(pct_coral - lpi_coral_pts) > 10)
 ```
 
 ## Calculate: % Cover by taxa and station
@@ -818,6 +827,9 @@ cover_by_station_and_taxa <- cover_by_station_and_taxa |>
 Aggregate metrics at the station level for ecological analysis.
   
 ```{r}
+grps_order <- c("cyanobacteria", "eam","sediment|rubble|barren", "other", "turf", "algae_encrusting",
+                "algae_erect","sponges", "soft_coral","cca", "hard_coral")
+
 n_morphotaxa <- cover_by_station_and_taxa |> 
   group_by(ps_station_id) |> 
   summarize(n_morphotaxa = n_distinct(morphotaxon),
@@ -825,47 +837,73 @@ n_morphotaxa <- cover_by_station_and_taxa |>
 
 cover_by_station_and_group <- cover_by_station_and_taxa |> 
   mutate(functional_group = case_when(functional_group %in% c("bryozoans","worms","echinoderms", "molluscs", "hydrozoans", "ascidians", "other_cnidarians") ~ "other",
-                                      functional_group %in% c("hard_coral_dead") ~ "sediment|barren|rubble",
-                                      TRUE ~ functional_group)) |> 
-  group_by(ps_station_id, functional_group) |> 
-  summarize(pct_cover = round(sum(pct_cover),2),
-            .groups = "drop") |> 
-  pivot_wider(names_from = functional_group, 
-              names_prefix = "pct_",
-              values_from = c(pct_cover), 
-              values_fill = 0) |> 
-  janitor::clean_names() |> 
-  rename(pct_coral = pct_hard_coral,
-         pct_rubble = pct_sediment_barren_rubble,
-         pct_cyano = pct_cyanobacteria,
-         pct_algae_encrust = pct_algae_encrusting) 
-
-station_summary <- lpi_stations |> 
-  left_join(n_morphotaxa) |> 
-  left_join(cover_by_station_and_group)
-```
-
-```{r}
-grps_order <- c("cyanobacteria", "eam","sediment|rubble|barren", "other", "turf", "algae_encrusting",
-                "algae_erect","sponges", "soft_coral","cca", "hard_coral")
-
-cover_by_station_and_taxa |> 
-  mutate(functional_group = case_when(functional_group %in% c("bryozoans","worms","echinoderms", "molluscs", "hydrozoans", "ascidians", "other_cnidarians") ~ "other",
                                       functional_group %in% c("hard_coral_dead") ~ "sediment|rubble|barren",
                                       TRUE ~ functional_group)) |> 
-  mutate(functional_group = fct_relevel(functional_group, 
-                                        grps_order)) |> 
-  group_by(ps_site_id, depth_strata, functional_group) |> 
+  group_by(region, subregion, ps_site_id, ps_station_id, depth_strata, functional_group) |> 
   summarize(pct_cover = round(sum(pct_cover),2),
             .groups = "drop") |> 
+  pivot_wider(names_from = functional_group, values_from = pct_cover, values_fill = 0) |> 
+  pivot_longer(cols = -c(ps_station_id, region, subregion, depth_strata, ps_site_id), names_to = "functional_group", values_to = "pct_cover") |>  
+  mutate(functional_group = fct_relevel(functional_group, grps_order))
+
+cover_by_station_and_group |> 
   mutate(site = str_extract(ps_site_id, "[^_]+$")) |> 
   filter(depth_strata != "supershallow") |> 
   ggplot()+
   geom_col(aes(site, pct_cover, fill = functional_group))+
-  facet_wrap(~depth_strata, ncol = 1)+
+  facet_grid(depth_strata~region, scales = "free")+
   scale_fill_manual(values = ps_colors("functional_groups"))+
-  ggthemes::theme_fivethirtyeight()
+  ggthemes::theme_fivethirtyeight()+
+  labs(x = NULL, y = "Benthic composition (% of station total)",
+       fill = "Functional group",
+       title = "Benthic cover composition by site, region, and depth")+
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text = element_text(face = "bold"),
+        legend.position = "bottom",
+        legend.key.height = unit(4, "mm"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 ```
+  
+```{r}
+cover_by_station_and_group |> 
+  group_by(region, subregion, depth_strata, functional_group) |> 
+  summarize(pct_cover = mean(pct_cover)) |> 
+  ungroup() |> 
+  filter(depth_strata != "supershallow") |> 
+  ggplot()+
+  geom_col(aes(subregion, pct_cover, fill = functional_group))+
+  facet_grid(depth_strata~region, scales = "free")+
+  scale_fill_manual(values = ps_colors("functional_groups"))+
+  ggthemes::theme_fivethirtyeight()+
+  labs(x = NULL, y = "Benthic composition (% of station total)",
+       fill = "Functional group",
+       title = "Benthic cover composition by subregion, and depth")+
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text = element_text(face = "bold"),
+        legend.position = "bottom",
+        legend.key.height = unit(4, "mm"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+  
+  
+  
+```{r}
+station_summary <- lpi_stations |> 
+  left_join(n_morphotaxa) |> 
+  left_join(cover_by_station_and_group |> 
+              pivot_wider(names_from = functional_group, 
+                          names_prefix = "pct_",
+                          values_from = c(pct_cover), 
+                          values_fill = 0) |> 
+              janitor::clean_names() |> 
+              rename(pct_coral = pct_hard_coral,
+                     pct_rubble = pct_sediment_rubble_barren,
+                     pct_cyano = pct_cyanobacteria,
+                     pct_algae_encrust = pct_algae_encrusting) )
+```
+
 
 ```{r}
 station_summary |> 
