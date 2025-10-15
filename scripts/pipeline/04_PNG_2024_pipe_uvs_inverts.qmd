@@ -1,0 +1,518 @@
+---
+title: "Inverts surveys - Data Pipeline"
+date: today
+format: 
+  html:
+    theme: minty
+    self-contained: true
+    code-fold: true
+    toc: true 
+    toc-depth: 3
+    toc-location: right
+    html-table-processing: none
+execute:
+  fig-width: 10
+---
+
+```{r setup, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
+options(scipen = 999)
+
+# Hook to format inline numeric expressions with comma separators:
+knitr::knit_hooks$set(inline = function(x) {
+  if (!is.numeric(x)) {
+    # For non-numeric values, just return as character
+    return(as.character(x))
+  }
+  # Format numbers with comma as big.mark, no scientific notation
+  format(x, big.mark = ",", scientific = FALSE)
+})
+
+library(sf)
+library(hms)
+library(readxl)
+library(janitor)
+library(lubridate)
+library(gt)
+library(pointblank)
+library(tidyverse)
+library(bigrquery)
+library(leaflet)
+library(leaflet.extras)
+library(ggtext)
+library(PristineSeasR2)
+
+
+ps_paths <- PristineSeasR2::get_drive_paths()
+
+exp_id <- "PNG_2024"
+
+exp_path <- file.path(ps_paths$expeditions, str_replace(exp_id, "_", "-"))
+
+bigrquery::bq_auth(email = "marine.data.science@ngs.org")
+
+bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas")
+```
+
+This documentation outlines the end-to-end pipeline for processing mobile invertebrate survey data collected during Pristine Seas expeditions. The pipeline ingests raw field data, standardizes formats, performs taxonomy lookups, applies rigorous quality assurance/quality control (QA/QC), computes station-level summaries, and loads the clean data into the Pristine Seas Science Database in BigQuery.
+
+## Data ingestion
+
+### Sites
+
+We begin by reading the UVS (Underwater Visual Survey) site information and standardizing it to match our database schema. Key steps include:
+
+  - Harmonizing field names using
+  - Converting data types (e.g., date, time, boolean fields) to their appropriate formats.
+  - Constructing ps_site_id using expedition and site identifiers.
+  
+```{r uvs_sites}
+uvs_sites <- tbl(bq_connection, "uvs.sites") |> 
+  filter(exp_id == "PNG_2024") |> 
+  collect()
+
+# Validate site data
+cat("Sites loaded:", nrow(uvs_sites), "\n")
+cat("Regions:", unique(uvs_sites$region), "\n")
+cat("Subregions:", unique(uvs_sites$subregion), "\n")
+
+lpi_stations <- tbl(bq_connection, "uvs.lpi_stations") |> 
+  filter(exp_id == "PNG_2024") |> 
+  collect()
+
+blt_stations <- tbl(bq_connection, "uvs.blt_stations") |> 
+  filter(exp_id == "PNG_2024") |> 
+  collect()
+```
+
+### Fieldbooks
+
+Next, process field observations from different divers, ensuring consistent formatting and traceability.
+
+  - Field names are harmonized, and units are standardized.
+  - Unique observation IDs (obs_id) are generated for QA/QC.
+  - Field data is cleaned and formatted to ensure database compatibility.
+
+```{r}
+inverts_leg1 <- read_xlsx(file.path(exp_path, "data/primary/raw/benthos", "PNG_2024_inverts_fieldsheet_MT.xlsx")) |> 
+  janitor::clean_names() |> 
+  rename(field_name        = taxa) |> 
+  mutate(diver             = "Molly Timmers",
+         ps_site_id        = paste0("PNG_2024_uvs_", str_pad(site, 3, pad = "0")),
+         transect_length_m = 50,
+         transect_width_m  = 1,
+         obs_id            = paste(exp_id, "inverts", observer, paste0(transect_width_m, "m"), str_pad(row_number(), 3, pad = "0"), sep = "_")) |> 
+  select(obs_id, diver, ps_site_id, transect, transect_length_m, transect_width_m, depth_m, field_name, count, size_cm, notes)
+
+inverts_leg2 <- read_xlsx(file.path(exp_path, "data/primary/raw/benthos/Invertebrates Caselle PNG.xlsx")) |> 
+  janitor::clean_names() |> 
+  rename(site = station_number,
+         field_name        = scientific_name,
+         count             = num) |> 
+  mutate(diver             = "Jenn Caselle",
+         ps_site_id        = paste0("PNG_2024_uvs_", str_pad(site, 3, pad = "0")),
+         transect_length_m = 25,
+         transect_width_m  = 2,
+         size_cm           = NA_integer_,
+         obs_id            = paste(exp_id, "inverts", "JC", paste0(transect_width_m, "m"), str_pad(row_number(), 3, pad = "0"), sep = "_")) |> 
+  select(obs_id, diver, ps_site_id, transect, transect_length_m, transect_width_m, depth_m, field_name, count, size_cm, notes)
+
+inverts_obs <- bind_rows(inverts_leg1, inverts_leg2) |> 
+  mutate(survey_area_m2 = transect_width_m*transect_length_m,
+         density_m2     = count/survey_area_m2)
+```
+
+## QA/QC Process
+
+### Stations
+
+```{r}
+transects <- inverts_obs |> 
+  filter(transect != "Off") |> 
+  group_by(diver, ps_site_id, transect, transect_width_m, transect_length_m, survey_area_m2) |> 
+  summarize(depth_m    = mean(depth_m),
+            count      = sum(count, na.rm = TRUE),
+            density_m2 = sum(density_m2, na.rm = TRUE),
+            .groups = "drop") |> 
+  mutate(depth_strata   = stratify(depth_m),
+         station_suffix = station_suffix(depth_strata),
+         ps_station_id  = paste(ps_site_id, station_suffix, sep = "_"))  |> 
+  select(diver, ps_station_id, depth_m, depth_strata, transect, survey_area_m2, count, density_m2) |> 
+  arrange(ps_station_id)
+
+stations <- transects |> 
+  group_by(diver, ps_station_id, depth_m, depth_strata) |> 
+  summarize(n_transects      = n_distinct(transect),
+            survey_area_m2   = sum(survey_area_m2),
+            total_count      = sum(count),
+            .groups = "drop") |> 
+  arrange(ps_station_id)
+```
+
+```{r}
+stations |> 
+  left_join(lpi_stations)
+```
+
+```{r stations}
+xxx <- bind_rows(blt_stations, lpi_stations) |> 
+  distinct(ps_station_id, ps_site_id, exp_id, region, subregion, habitat, exposure, depth_strata)
+
+  full_join(stations) 
+
+xxx |> 
+  get_dupes(ps_station_id)
+```
+
+```{r stations_qaqc}
+inverts_stations |> 
+  create_agent(label = "Inverts Stations QA/QC", tbl_name = "inverts_stations") |> 
+  rows_distinct(ps_station_id,
+                label = "Station IDs are unique",
+                actions = action_levels(stop_at = 0.001)) |>
+  col_vals_gt(columns = vars(total_count), 
+                 value = 0,
+                 label = "Stations with no inverts",
+                 actions = action_levels(warn_at = 0.001)) |>
+  interrogate()
+```
+
+Now, lets visualize the distribution of our sampling effort and summarize it by region and subregion to inspect any potential outliers.
+
+```{r map}
+#| label: fig-map
+#| fig-cap: "Interactive map of inverts survey stations"
+
+# Create spatial features
+inverts_sites_sf <- inverts_stations |> 
+  group_by(ps_site_id) |> 
+  summarize(team        = paste(unique(divers), collapse = "/"),
+            strata      = paste(unique(paste(depth_strata, " (", depth_m, "m)", sep = "")), collapse = "\n"),
+            n_stations  = n_distinct(ps_station_id),
+            avg_count   = mean(total_count),
+            .groups = "drop") |> 
+  left_join(uvs_sites |> 
+              select(ps_site_id, region, subregion, locality, habitat, exposure, latitude, longitude)) |> 
+  sf::st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+# Create interactive map
+mapview::mapview(inverts_sites_sf,
+                 zcol = "avg_count",
+                 at = c(0, 1, 5, 10, 50, 100),
+                 legend = TRUE,
+                 map.types = "Esri.WorldImagery",
+                 layer.name = "Count",
+                 popup = leafpop::popupTable(inverts_sites_sf, 
+                                             zcol = c("ps_site_id", "strata", "team", "habitat", "exposure", "avg_count" ))) |> 
+  leafem::addMouseCoordinates() |> 
+  addFullscreenControl()
+```
+
+```{r effort_summary, eval = T, include = T}
+#| label: tbl-inverts-stations
+#| tbl-cap: "Number of Inverts survey stations by depth strata"
+
+inverts_stations |> 
+  group_by(region, subregion, depth_strata) |>
+  summarise(n = n_distinct(ps_station_id), .groups = "drop") |> 
+  pivot_wider(names_from = depth_strata, values_from = n, values_fill = 0) |> 
+  mutate(Total = rowSums(across(where(is.numeric)), na.rm = TRUE)) |>
+  gt(groupname_col = "region") |> 
+  tab_options(table.font.size = 12,
+              data_row.padding = px(5),
+              table.width = pct(90),
+              row_group.as_column = TRUE) |> 
+  tab_source_note(source_note = "Depth strata: supershallow (< 6 m), shallow (7-14 m), deep (15-30 m)") |> 
+  tab_spanner(label = "Depth Strata", 
+              columns = c("deep", "shallow", "supershallow")) |> 
+  cols_label(subregion = "Subregion") |>
+  fmt_number(columns = where(is.numeric), decimals = 0)
+```
+
+### Observations
+
+We now perform QA/QC on the observations data, ensuring that each observation is unique and that key fields are complete. We also check that counts are within a reasonable range.
+
+```{r observations_qaqc}
+inverts_obs |> 
+  filter(!taxon %in% c("NO INVERTS", "NO SURVEY")) |> 
+  create_agent(label = "Inverts Obs QA/QC", tbl_name = "inverts_obs") |> 
+  rows_distinct(obs_id,
+                label = "Obs IDs are unique",
+                actions = action_levels(stop_at = 0.001)) |>
+  rows_complete(columns = vars(ps_station_id, diver, depth_m, taxon, count),
+                label = "Complete rows for key fields",
+                actions = action_levels(warn_at = 0.01, stop_at = 0.05)) |>
+  col_vals_between(columns = vars(count), left = 0, right = 100,
+                   label = "Counts are between 0 and 100",
+                   actions = action_levels(warn_at = 0.001)) |>
+  interrogate()
+```
+
+```{r}
+largest_n_smallest <- bind_rows(inverts_obs |> 
+                                  slice_max(size_cm),
+                                inverts_obs |> 
+                                  slice_min(size_cm)) |> 
+  select(ps_station_id, taxon, count, size_cm, notes)
+```
+
+The largest invertebrate observed was a `r largest_n_smallest$size_cm[1]` cm `r largest_n_smallest$taxon[1]`, while the smallest was a `r largest_n_smallest$taxon[2]` at `r largest_n_smallest$size_cm[2]` cm.
+
+### Taxa
+
+```{r taxa}
+inverts_taxa <- inverts_obs |> 
+  filter(!taxon %in% c("NO INVERTS", "NO SURVEY")) |> 
+  group_by(taxon) |> 
+  summarize(total_count = sum(count, na.rm = T)) |> 
+  mutate(taxon_clean = taxon |>
+           str_remove(regex("\\blike.*", ignore_case = TRUE)) |>          # remove "like..." and everything after
+           str_remove(regex("\\bsp(p)?\\.?\\b.*", ignore_case = TRUE)) |> # remove "sp.", "spp.", etc.
+           str_remove(regex("\\bcf\\.|aff\\.", ignore_case = TRUE)) |>    # remove "cf.", "aff."
+           str_remove_all("[\\?\\(\\)]") |>                               # remove question marks and parens
+           str_remove_all("\\*") |> 
+           str_squish() |> 
+           str_to_sentence())  
+
+inverts_taxa$taxon_clean[inverts_taxa$taxon == "hermit crab unidentified"] <- "Paguridae"
+inverts_taxa$taxon_clean[inverts_taxa$taxon == "Unidentified crinoids"] <- "Crinoidea"
+inverts_taxa$taxon_clean[inverts_taxa$taxon == "Clam unidentified"] <- "Bivalvia"
+inverts_taxa$taxon_clean[inverts_taxa$taxon == "Tridacna squamosa hybrid"] <- "Tridacna squamosa"
+```
+
+```{r taxa_qaqc}
+# Lookup table
+
+inverts_lut <- tbl(bq_connection, "taxonomy.inverts") |> 
+  filter(!is.na(accepted_aphia_id)) |> 
+  collect()
+
+names_to_aphiaID <- inverts_lut |> 
+  select(accepted_aphia_id, taxon_name, accepted_name) |>
+  pivot_longer(cols = c("taxon_name", "accepted_name"), names_to = "orig_col", values_to = "lookup_name") |>
+  filter(!is.na(lookup_name)) |>
+  distinct(accepted_aphia_id, lookup_name) 
+
+# Check for taxa not in the lookup table
+
+inverts_taxa <- inverts_taxa |> 
+  left_join(names_to_aphiaID, 
+            by = c("taxon_clean" = "lookup_name"))
+  
+not_in_db <- inverts_taxa |>   
+  filter(is.na(accepted_aphia_id)) 
+
+# Get info
+
+worms_raw <- purrr::map_dfr(not_in_db$taxon_clean, ~worrms::wm_records_names(.x))
+
+worms_records <- worms_raw |> 
+  select(taxon_clean = scientificname, aphia_id = AphiaID, rank, 
+         name_status = status, accepted_name = valid_name, accepted_aphia_id = valid_AphiaID) 
+
+get_taxonomic_ranks <- function(id) {
+  tryCatch({
+    worrms::wm_classification(id) |>
+      select(rank, scientificname) |>
+      pivot_wider(names_from = rank, values_from = scientificname) |>
+      mutate(accepted_aphia_id = id)
+  }, error = function(e) {
+    tibble(accepted_aphia_id = id)
+  })
+}
+
+taxonomy <- map_dfr(.x = worms_records$accepted_aphia_id, 
+                    .f = get_taxonomic_ranks) |>
+  clean_names() |>
+  distinct(accepted_aphia_id, kingdom, phylum, class, order, family, genus)
+
+worms_final <- worms_records |> 
+  left_join(taxonomy, by = "accepted_aphia_id")
+
+not_in_db <- not_in_db |> 
+  select(taxon, taxon_clean) |> 
+  left_join(worms_final |> 
+              select(taxon_clean, rank, accepted_name, accepted_aphia_id, kingdom, phylum, class, order, family, genus))
+
+# Add traits before uploading
+
+not_in_db <- not_in_db |> 
+  mutate(rank = str_to_lower(rank),
+         common_name = c("Turban snails", "Hermit crabs"),
+         mobility  = NA_character_,
+         feeding   = NA_character_,
+         human_use = NA_character_)
+
+# merge
+
+inverts_taxa <- inverts_taxa |> 
+  filter(!is.na(accepted_aphia_id)) |> 
+  bind_rows(not_in_db |> 
+              select(taxon, taxon_clean, accepted_aphia_id))
+
+inverts_lut_updated <- bind_rows(inverts_lut |> 
+                                   distinct(accepted_aphia_id, accepted_name, rank, family, common_name),
+                                 not_in_db |> 
+                                   distinct(accepted_aphia_id, accepted_name, rank, family, common_name))
+
+inverts_taxa <- inverts_taxa |> 
+  left_join(inverts_lut_updated |> 
+              distinct(accepted_aphia_id, accepted_name, rank, family, common_name)) 
+```
+
+**Summary:** We conducted inverts surveys at **`r n_distinct(inverts_stations$ps_site_id)`** sites and **`r n_distinct(inverts_stations$ps_station_id)`** stations during the `r exp_id` expedition. Across **`r n_distinct(inverts_stations$region)`** regions, we surveyed a total area of **`r sum(inverts_stations$survey_area_m2)`** m of reef habitats.
+
+## Density by taxa and station
+
+```{r}
+# Join back 
+
+inverts_obs <- inverts_obs |> 
+  filter(!taxon %in% c("NO INVERTS", "NO SURVEY")) |> 
+  left_join(inverts_taxa |> 
+              distinct(taxon, accepted_name, accepted_aphia_id, rank, family, common_name), 
+            by = "taxon") |> 
+  rename(morphotaxon = taxon) |> 
+  mutate(in_transect = TRUE,
+         survey_dist_m = 50,
+         survey_area_m2 = transect_width_m*survey_dist_m,
+         density_m2 = count/survey_area_m2,
+         size_type = case_when(common_name == "Giant clams" ~ "total length",
+                               common_name == "Top shells" ~ "basal diameter",
+                               common_name == "Pearl oysters" ~ "shell width",
+                               common_name == "Crown-of-thorns starfish" ~ "diameter",
+                               TRUE ~ NA_character_),
+         size_type = if_else(is.na(size_cm), NA_character_, size_type)) |> 
+  select(obs_id, ps_station_id, exp_id, diver, station_label, depth_m, in_transect, transect_width_m,
+         morphotaxon, accepted_name, accepted_aphia_id, rank, family, common_name, count, density_m2, size_cm, size_type, notes)
+
+density_by_station_and_taxa <- inverts_obs |> 
+  group_by(ps_station_id, exp_id, morphotaxon, accepted_name, accepted_aphia_id, rank, family, common_name) |> 
+  summarize(total_count = sum(count), 
+            density_m2 = sum(density_m2),
+            avg_size_cm = mean(size_cm, na.rm = TRUE),
+            .groups = "drop") |> 
+  mutate(functional_group = NA_character_,
+         notes = NA_character_) |> 
+  left_join(inverts_stations |> 
+              select(ps_station_id, depth_m, depth_strata, divers, exp_id, exposure, habitat, ps_site_id, region, subregion)) |> 
+  select(ps_station_id, ps_site_id, exp_id, region, subregion, exposure, habitat,
+         divers, depth_strata, depth_m,
+         morphotaxon, accepted_name, accepted_aphia_id, rank, family, common_name, functional_group,
+         total_count, density_m2, avg_size_cm) 
+```
+
+## Station Summary
+
+```{r}
+station_summary <- density_by_station_and_taxa |> 
+  group_by(ps_station_id) |> 
+  summarize(total_taxa       = n_distinct(accepted_name),
+            total_count      = sum(total_count), 
+            density_m2       = sum(density_m2),
+            .groups = "drop") 
+
+inverts_stations <- inverts_stations |> 
+  select(-total_count) |> 
+  left_join(station_summary, by = "ps_station_id") |> 
+  replace_na(list(total_taxa = 0, total_count = 0, density_m2 = 0))
+```
+
+## Explore
+
+```{r explore}
+inverts_stations |> 
+  ggplot(aes(x = region, y = total_count, fill = depth_strata)) +
+  geom_boxplot(alpha = 0.6, color = "gray40", outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1, alpha = 0.5, color = "gray30") +
+  labs(x = "", 
+       y = "",
+       title = "**Inverts Abundance by Depth Strata**",
+       subtitle = "Comparison across depth strata") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_markdown(size = 18, face = "bold"),
+        plot.subtitle = element_text(size = 12, face = "italic"),
+        strip.text = element_text(size = 12, face = "bold"),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_line(color = "gray90"),
+        panel.grid.major.x = element_blank())+
+  scale_fill_manual(values = ps_colors("depth_strata"))
+```
+
+## Database integration
+
+Final validation checks before uploading to the Pristine Seas Science Database.
+
+```{r pre_upload}
+# Validate data completeness
+validation_summary <- list(
+  stations = list(
+    total_records = nrow(inverts_stations),
+    complete_records = sum(complete.cases(inverts_stations |> select(-locality))),
+    missing_critical = sum(is.na(inverts_stations$ps_station_id) | 
+                          is.na(inverts_stations$exp_id) | 
+                          is.na(inverts_stations$region))
+  ),
+  observations = list(
+    total_records = nrow(inverts_obs),
+    complete_records = sum(complete.cases(inverts_obs)),
+    total_count = sum(inverts_obs$count),
+    species_count = n_distinct(inverts_obs$accepted_name)
+  )
+)
+
+# Display validation summary
+cat("📊 Data Validation Summary\n")
+cat("========================\n\n")
+
+cat("Station Summary:\n")
+cat("  - Total records:", validation_summary$stations$total_records, "\n")
+cat("  - Complete records:", validation_summary$stations$complete_records, "\n")
+cat("  - Missing critical fields:", validation_summary$stations$missing_critical, "\n\n")
+
+cat("Points:\n")
+cat("  - Total records:", validation_summary$observations$total_records, "\n")
+cat("  - Complete records:", validation_summary$observations$total_records, "\n")
+cat("  - Total count:", validation_summary$observations$total_count, "\n")
+cat("  - Unique species:", validation_summary$observations$species_count, "\n\n")
+```
+
+Finally, Upload the validated and processed data to BigQuery, maintaining data integrity and traceability.
+
+```{r stations_to_bq}
+bq_table_upload(bq_table("pristine-seas", "uvs", "inverts_stations"),
+                values = inverts_stations |> select(-transect_width_m),
+                create_disposition = "CREATE_NEVER",
+                write_disposition = "WRITE_APPEND")
+
+bq_table_upload(bq_table("pristine-seas", "uvs", "inverts_observations"),
+                values = inverts_obs,
+                create_disposition = "CREATE_NEVER",
+                write_disposition = "WRITE_APPEND")
+
+bq_table_upload(bq_table("pristine-seas", "uvs", "inverts_density_by_taxa"),
+                values = density_by_station_and_taxa,
+                create_disposition = "CREATE_NEVER",
+                write_disposition = "WRITE_APPEND")
+```
+
+
+```{r}
+stations <- tbl(bq_connection, "uvs.inverts_stations") |> 
+  filter(exp_id == "SLB_2024") |> 
+  collect()
+
+write_csv(stations, file.path(exp_path, "data/primary/output/uvs/inverts_station_summary.csv"))
+
+obs <- tbl(bq_connection, "uvs.inverts_observations") |> 
+  filter(exp_id == "SLB_2024") |> 
+  collect()
+
+write_csv(obs, file.path(exp_path, "data/primary/output/uvs/inverts_observations.csv"))
+
+density <- tbl(bq_connection, "uvs.inverts_density_by_taxa") |> 
+  filter(exp_id == "SLB_2024") |> 
+  collect()
+
+write_csv(density, file.path(exp_path, "data/primary/output/uvs/inverts_density_by_station_and_taxa.csv"))
+```

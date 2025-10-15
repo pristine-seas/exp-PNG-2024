@@ -860,11 +860,6 @@ station_summary |>
 Aggregate metrics at the station level for ecological analysis.
   
 ```{r}
-n_morphotaxa <- cover_by_station_and_taxa |> 
-  group_by(ps_station_id) |> 
-  summarize(n_morphotaxa = n_distinct(morphotaxon),
-            .groups = "drop") 
-
 cover_by_station_and_group |> 
   mutate(site = str_extract(ps_site_id, "[^_]+$")) |> 
   filter(depth_strata != "supershallow") |> 
