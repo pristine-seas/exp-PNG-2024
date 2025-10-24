@@ -1,0 +1,599 @@
+---
+title: "Home Ranges"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: right
+    code-fold: true
+    theme: cosmo
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
+options(scipen = 999)
+
+# Hook to format inline numeric expressions with comma separators:
+knitr::knit_hooks$set(inline = function(x) {
+  if (!is.numeric(x)) {
+    # For non-numeric values, just return as character
+    return(as.character(x))
+  }
+  # Format numbers with comma as big.mark, no scientific notation
+  format(x, big.mark = ",", scientific = FALSE)
+})
+
+library(PristineSeasR2)
+library(sf)
+library(terra)
+library(tidyterra)
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(DBI)
+library(bigrquery)
+library(mregions2)
+library(tidyverse)
+
+
+ps_paths <- PristineSeasR2::get_drive_paths()
+
+exp_id <- "PNG_2024"
+
+exp_path <- file.path(ps_paths$expeditions, str_replace(exp_id, "_", "-"))
+
+bigrquery::bq_auth(email = "marine.data.science@ngs.org")
+
+bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas")
+
+# Define the optimal CRS for western PNG region
+png_crs <- "EPSG:32754"  # UTM Zone 54S - best for western PNG```
+```
+
+# Spatial Layers
+
+## EEZ
+
+```{r eval = F}
+eez <- mrp_get("eez_land",
+               path = getOption("mregions2.download_path", tempdir()),
+               cql_filter = "mrgid_eez = '8324'") |> 
+  vect()
+
+ # eez |>
+ #   writeVector(file.path(exp_path, "data/secondary/output/png_eez.gpkg"), 
+ #               overwrite = TRUE)
+```
+
+## Provincial waters
+
+```{r eval = F}
+# --- 1. Load global islands ---
+gdb_path <- file.path(ps_paths$datasets, "USGSEsriWCMC_GlobalIslands_v3/v10/globalislandsfix.gdb")
+
+all_islands_moll <- bind_rows(mutate(st_read(gdb_path, layer = "USGSEsriWCMC_GlobalIslandsv2_BigIslands"),  layer_source = "BigIslands"),
+                         mutate(st_read(gdb_path, layer = "USGSEsriWCMC_GlobalIslandsv2_Continents"),  layer_source = "Continents"),
+                         mutate(st_read(gdb_path, layer = "USGSEsriWCMC_GlobalIslandsv2_SmallIslands"), layer_source = "SmallIslands"),
+                         mutate(st_read(gdb_path, layer = "USGSEsriWCMC_GlobalIslandsv2_VerySmallIslands"), layer_source = "VerySmallIslands")) |> 
+  vect()
+
+eez_moll <- project(eez, all_islands_moll)
+
+# --- 3. Crop and mask to keep only islands within EEZ ---
+png_islands_moll <- all_islands_moll |> 
+  crop(eez_moll) |>    # fast bbox crop
+  mask(eez_moll)       # trim to actual EEZ polygon
+
+# --- 4. Reproject to a projected CRS for buffering ---
+# PNGMG94 / UTM zone 55S
+png_islands_utm <- project(png_islands_moll, 
+                           "EPSG:3832")
+
+eez_utm <- project(eez, "EPSG:3832")
+
+# --- 5. Create 12 nautical mile buffer (22,224 m) ---
+nm_to_m <- 12 * 1852
+
+png_buffer <- buffer(png_islands_utm, width = nm_to_m)
+
+# --- 6. Keep only buffer inside EEZ ---
+png_buffer_eez <- intersect(png_buffer, eez_utm)
+
+png_buffer_sea <- erase(png_buffer_eez, png_islands_utm)
+
+png_12nm_final <- aggregate(png_buffer_sea)
+
+png_12nm_final_wgs84 <- project(png_12nm_final, "EPSG:4326")
+
+# writeVector(png_12nm_final_wgs84,
+#             file.path(exp_path, "data/secondary/output/png_12nm.gpkg"), 
+#             overwrite = TRUE)
+
+# png_islands_utm |> 
+#   project("EPSG:4326") |> 
+#   writeVector(file.path(exp_path, "data/secondary/output/png_islands.gpkg"), 
+#               overwrite = TRUE)
+```
+
+## Existing MPAS
+
+These polygons are derived from official coordinate vertices and represent the current legally designated MPA boundaries within northern Papua New Guinea.
+
+```{r eval = F}
+#| label: existing-mpas
+#| eval: true
+#| echo: true
+#| message: false
+#| warning: false
+
+# Existing MPAs: Murat Islands and Lovongai (New Hanover)
+
+library(terra)
+
+# --- Define CRS -------------------------------------------------------------
+crs_wgs84 <- "EPSG:4326"     # geographic input (degrees)
+crs_utm54 <- "EPSG:32754"    # UTM zone 54S, suitable for northern PNG
+
+# --- 1. Murat Islands MPA ---------------------------------------------------
+murat_coords <- matrix(
+  c(149.350814, -1.05926,    # A
+    150.875061, -1.514539,   # B
+    150.821773, -1.959484,   # C
+    149.296957, -1.800728,   # D
+    149.350814, -1.05926),   # back to A
+  ncol = 2, byrow = TRUE
+)
+
+murat_poly <- vect(list(murat_coords), type = "polygons", crs = crs_wgs84)
+murat_poly$name <- "Murat Islands MPA"
+
+# --- 2. Lovongai (New Hanover) MPA -----------------------------------------
+lovongai_coords <- matrix(
+  c(150.255901, -2.098103,   # A
+    150.627269, -2.365797,   # B
+    150.625710, -2.571294,   # C
+    150.514881, -2.575500,   # D
+    150.351333, -2.837626,   # E
+    149.546736, -2.830961,   # F
+    149.459801, -2.537271,   # G
+    150.255901, -2.098103),  # back to A
+  ncol = 2, byrow = TRUE
+)
+
+lovongai_poly <- vect(list(lovongai_coords), type = "polygons", crs = crs_wgs84)
+lovongai_poly$name <- "Lovongai (New Hanover) MPA"
+
+# --- 3. Combine, project, and compute area ---------------------------------
+existing_mpas <- rbind(murat_poly, lovongai_poly)
+existing_mpas <- project(existing_mpas, crs_utm54)
+existing_mpas$area_km2 <- round(expanse(existing_mpas) / 1e6, 1)
+existing_mpas$status    <- "Designated"
+
+# --- 4. Export --------------------------------------------------------------
+out_path <- file.path(exp_path, "data/secondary/output/PNG_existing_MPAs.gpkg")
+writeVector(existing_mpas, out_path, overwrite = TRUE)
+```
+
+## Western PNG islands and provincial waters
+
+```{r eval = F}
+png_12nm    <- vect(file.path(exp_path, "data/secondary/output/png_12nm.gpkg"))
+png_eez     <- vect(file.path(exp_path, "data/secondary/output/png_eez.gpkg"))
+png_islands <- vect(file.path(exp_path, "data/secondary/output/png_islands.gpkg"))
+
+west_png_bbox <- ext(141.0024, 145.8, -1.9645, 1.4353)
+
+# Crop each layer
+png_islands_west <- crop(png_islands, west_png_bbox)
+png_12nm_west    <- crop(png_12nm, west_png_bbox)
+png_eez_west     <- crop(png_eez, west_png_bbox)
+
+# Save cropped layers
+writeVector(png_islands_west, 
+            file.path(exp_path,"data/secondary/output/PNG_islands_west.gpkg"), overwrite = TRUE)
+
+writeVector(png_12nm_west, 
+            file.path(exp_path,"data/secondary/output/PNG_12nm_west.gpkg"), overwrite = TRUE)
+```
+
+```{r eval = F}
+library(tidyterra)
+
+ggplot() +
+  geom_spatvector(data = png_12nm, 
+                  fill = "lightblue", alpha = 0.7) +
+  geom_spatvector(data = png_islands_west, 
+                  fill = "brown", color = "darkred", size = 0.3) 
+```
+
+# Species Home Ranges
+
+```{r eval = F}
+png_eez     <- vect(file.path(exp_path, "data/secondary/output/png_eez.gpkg"))
+png_12nm    <- vect(file.path(exp_path, "data/secondary/output/png_12nm.gpkg"))
+png_islands <- vect(file.path(exp_path, "data/secondary/output/png_islands.gpkg"))
+
+png_crs <- "EPSG:32754"  # UTM Zone 54S - best for western PNG```
+
+WI_12nm <- vect(file.path(exp_path,"data/secondary/output/PNG_12nm_west.gpkg"))
+WI_islands <- vect(file.path(exp_path,"data/secondary/output/PNG_islands_west.gpkg"))
+
+home_ranges <- tribble(~species,                  ~range_km, ~range_nm,
+                       "Green sea turtle",         35,        19,
+                       "Bottlenose dolphin",       46,        25,
+                       "Grey reef shark",          66,        35,
+                       "Reef manta",               85,        46,
+                       "Red-footed booby",         86,        46,
+                       "Wedge-tailed shearwater", 100,        54,
+                       "Great frigate",           334,       180,
+                       "Sooty tern",              444,       240)
+
+WI_12nm <- project(WI_12nm, png_crs) |> 
+  fillHoles()
+
+# --- Generate buffers for all species ---
+species_buffers <- map2(.x = home_ranges$species, 
+                        .y = home_ranges$range_nm,
+                        \(sp, nm_range) {
+                          dist_m <- (nm_range - 12) * 1852
+                          buf    <- buffer(WI_12nm, width = dist_m)
+                          buf$species  <- sp
+                          buf$range_nm <- nm_range
+                          buf$range_km <- nm_range * 1.852
+                          buf
+                        }
+)
+
+home_range_all <- do.call(rbind, species_buffers)
+
+home_range_all <- home_range_all |> 
+  st_as_sf() |> 
+  smoothr::smooth(method = "ksmooth",  smoothness = 4) |> 
+  mutate(species = factor(species, levels = c("Green sea turtle",  
+                                              "Bottlenose dolphin",
+                                              "Grey reef shark",     
+                                              "Reef manta",      
+                                              "Red-footed booby",     
+                                              "Great frigate",    
+                                              "Sooty tern"          ))) |> 
+  vect()
+
+home_range_all <- home_range_all |> 
+  erase(project(WI_12nm, png_crs) |> 
+          fillHoles()) |> 
+  erase(project(WI_islands, png_crs))
+
+home_range_all |> 
+  project("EPSG:4326") |>
+  writeVector(file.path(exp_path, "data/secondary/output/WI_species_buffers.gpkg"), 
+              overwrite = TRUE)
+```
+
+# MPA opportunities
+
+```{r}
+# --- Load spatial layers ----------------------------------------------------
+# Load species home-range buffers and national maritime limits
+species_buffers <- vect(file.path(exp_path, "data/secondary/output/WI_species_buffers.gpkg"))
+png_eez         <- vect(file.path(exp_path, "data/secondary/output/png_eez.gpkg"))
+png_12nm        <- vect(file.path(exp_path, "data/secondary/output/png_12nm.gpkg"))
+png_islands <- vect(file.path(exp_path, "data/secondary/output/png_islands.gpkg"))
+
+# --- Harmonize coordinate reference systems (UTM Zone 54S) -----------------
+# Ensure all layers share a common CRS before overlay operations
+png_eez  <- project(png_eez,  crs(species_buffers))
+png_12nm <- project(png_12nm, crs(species_buffers))
+```
+
+#### Western Islands
+
+This section delineates a candidate Marine Protected Area (MPA) in the western region of Papua New Guinea. The proposed boundary begins at approximately 35 nautical miles from shore (the typical range of Grey reef sharks), extending seaward to the outer EEZ boundary, while excluding the 12-nm coastal zone reserved for domestic use.
+
+##### Option 1: 35 n.m connecting the Western Islands
+
+```{r}
+# --- 1. Select the Grey Reef Shark range (~35 nm from land) ----------------
+WI_option1 <- species_buffers[species_buffers$species == "Grey reef shark", ]
+
+expanse(WI_option1, unit = "km") # 50K km²
+
+WI_option1$name       <- "Western Islands National MPA"
+WI_option1$boundary   <- "12 nm – 35 nm"
+WI_option1$notes      <- "Based non-migratory movements of grey reef sharks"
+
+WI_option1 |> 
+  select(name, boundary, notes) |> 
+  writeVector(file.path(exp_path, "data/primary/output/MPA_proposal_WI_1.gpkg"),
+              overwrite = TRUE)
+```
+
+##### Option 2: Extend to EEZ
+
+```{r}
+# --- 2. Define the offshore extent for the proposed MPA --------------------
+# The bounding box spans the western offshore region between the shark range
+# and the EEZ boundary.
+
+shark_buffer <- species_buffers[species_buffers$species == "Grey reef shark", ]
+shark_buffer <- project(shark_buffer, crs(species_buffers))
+shark_ext <- ext(shark_buffer)
+eez_ext   <- ext(png_eez)
+
+ymin_val <- ymin(shark_ext)
+ymax_val <- ymax(eez_ext)
+xmin_val <- xmin(eez_ext)
+xmax_val <- xmax(shark_ext)
+
+mpa_ext  <- ext(xmin_val, xmax_val, ymin_val, ymax_val)
+WI_option2 <- as.polygons(mpa_ext, crs = crs(species_buffers))
+
+# --- 3. Restrict to EEZ and remove the 12-nm nearshore zone ----------------
+WI_option2 <- terra::intersect(WI_option2, png_eez)
+
+png_12nm_fill <- png_12nm |> 
+  fillHoles()
+
+WI_option2 <- erase(WI_option2, 
+                    png_12nm_fill)
+
+WI_option2 <- makeValid(WI_option2)
+
+# --- 4. Annotate and visualize --------------------------------------------
+WI_option2$name       <- "Western Islands Large National MPA"
+WI_option2$boundary   <- "12 nm – EEZ"
+WI_option2$notes      <- "Offshore pelagic zone; 35–200 nm range"
+
+# --- 5. Export -------------------------------------------------------------
+WI_option2 |> 
+  select(name, boundary, notes) |> 
+  writeVector(file.path(exp_path, "data/primary/output/MPA_proposal_WI_2.gpkg"),
+            overwrite = TRUE)
+
+expanse(WI_option2, unit = "km") # 259K km²
+```
+
+#### Murat
+
+##### Option 3: Existing local MPAs 
+
+```{r}
+murat_option1 <- vect(file.path(exp_path, "data/secondary/output/PNG_existing_MPAs.gpkg")) 
+
+murat_option1 <- murat_option1 |> 
+  erase(project(png_islands, murat_option1))
+
+sum(expanse(murat_option1, unit = "km")) # 16700 km2
+
+
+
+murat_option1 <- murat_option1 |> 
+  group_by(name) |> 
+  aggregate()
+
+murat_option1$name       <- "New Ireland Local MPAs"
+murat_option1$boundary   <- "Existing MPAs"
+murat_option1$notes      <- "Murat Islands and Lovongai (New Hanover) MPAs"
+
+murat_option1 |> 
+  select(name, boundary, notes) |> 
+  project("EPSG:4326") |>
+  writeVector(file.path(exp_path, "data/primary/output/MPA_proposal_NI_1.gpkg"),
+            overwrite = TRUE)
+```
+
+##### Option 4: Extend to EEZ
+
+This section defines a candidate Marine Protected Area (MPA) encompassing the 12 nm coastal zone around the Murat island group in northern Papua New Guinea.
+
+```{r}
+# --- 1. Define Murat region extent and crop base layers --------------------
+murat_png_bbox <- ext(149.28, 150.9, -2.86, -1)  # Approximate Murat Islands region
+
+png_islands_Murat <- crop(png_islands, murat_png_bbox)
+png_12nm_Murat    <- crop(png_12nm,    murat_png_bbox)
+
+# --- 2. Harmonize CRS ------------------------------------------------------
+png_islands_Murat <- project(png_islands_Murat, crs(species_buffers))
+png_12nm_Murat    <- project(png_12nm_Murat,    crs(species_buffers))
+png_eez           <- project(png_eez,           crs(species_buffers))
+
+# --- 3. Derive the bounding box and build an extent polygon ---------------
+murat_extent <- ext(png_12nm_Murat)
+eez_ext      <- ext(png_eez)
+
+ymin_val <- ymin(murat_extent)
+ymax_val <- ymax(eez_ext)
+xmin_val <- xmin(murat_extent)
+xmax_val <- xmax(murat_extent)
+
+murat_mpa_ext  <- ext(xmin_val, xmax_val, ymin_val, ymax_val)
+murat_mpa_poly <- as.polygons(murat_mpa_ext, crs = crs(species_buffers))
+
+# --- 4. Clip to EEZ and EXCLUDE the 12 nm zone -----------------------------
+# This proposal mirrors the Western Islands design, encompassing waters beyond
+# national coastal use zones but within PNG’s EEZ.
+murat_mpa <- terra::intersect(murat_mpa_poly, png_eez)
+
+murat_mpa <- erase(murat_mpa, png_12nm_Murat |> fillHoles())
+murat_mpa <- erase(murat_mpa, png_islands_Murat)
+murat_mpa <- makeValid(murat_mpa)
+plot(murat_mpa)
+
+# --- 5. Annotate and visualize --------------------------------------------
+murat_mpa$name       <- "New Irelan National MPA"
+murat_mpa$boundary   <- "12 nm – EEZ"
+murat_mpa$notes     <- "Encompasses the Murat and Lovongai MPAs"
+
+murat_mpa |> 
+  select(name, boundary, notes) |> 
+  writeVector(file.path(exp_path, "data/primary/output/MPA_proposal_NI_2.gpkg"),
+            overwrite = TRUE)
+```
+
+## MPA areas 
+
+```{r}
+MPA_NI_1 <- vect(file.path(exp_path, "data/primary/output/MPA_proposal_NI_1.gpkg"))
+MPA_NI_2 <- vect(file.path(exp_path, "data/primary/output/MPA_proposal_NI_2.gpkg"))
+MPA_WI_1    <- vect(file.path(exp_path, "data/primary/output/MPA_proposal_WI_1.gpkg"))
+MPA_WI_2  <- vect(file.path(exp_path, "data/primary/output/MPA_proposal_WI_2.gpkg"))
+
+mpa_proposals <- rbind(MPA_NI_1, MPA_NI_2, MPA_WI_1, MPA_WI_2)
+
+eez_area <- mrp_get("eez",
+               path = getOption("mregions2.download_path", tempdir()),
+               cql_filter = "mrgid_eez = '8324'") |> 
+  vect() |> 
+  expanse("km")
+
+100*expanse(mpa_proposals, unit = "km")/eez_area
+```
+
+# Fishing Effort
+
+```{r}
+# ---  Query and summarise GFW fishing effort ------------------------------
+png_effort <- tbl(bq_connection, "GFW.binned_effort_by_ssvid_2016_2024") |> 
+  filter(eez == "8324", fishing_hours > 0) |> 
+  group_by(year, eez, lon_bin, lat_bin, flag, gear_type) |> 
+  summarize(n_vessels     = n_distinct(ssvid),
+            fishing_hrs   = sum(fishing_hours, na.rm = T),
+            fishing_KWhrs = sum(engine_power_kw*fishing_hours, na.rm = T)) |> 
+  ungroup() |> 
+  collect()
+
+png_effort |> 
+  group_by(year, gear_type) |> 
+  summarize(total_fishing_KWhrs = sum(fishing_KWhrs, na.rm = TRUE),
+            .groups = "drop") |> 
+  ggplot() +
+  geom_line(aes(year, total_fishing_KWhrs, color = gear_type))
+```
+
+```{r}
+png_effort |> 
+  group_by(lon_bin, lat_bin) |> 
+  summarize(total_fishing_KWhrs = sum(fishing_KWhrs, na.rm = TRUE),
+            .groups = "drop") |> 
+  ggplot() +
+  geom_tile(aes(lon_bin, lat_bin, fill = total_fishing_KWhrs)) 
+```
+
+```{r}
+png_effort |> 
+  filter(gear_type %in% c("tuna_purse_seines", "drifting_longlines")) |>
+  group_by(year, gear_type, lon_bin, lat_bin) |> 
+  summarize(total_fishing_KWhrs = sum(fishing_KWhrs, na.rm = TRUE),
+            .groups = "drop") |> 
+  ggplot() +
+  geom_tile(aes(lon_bin, lat_bin, fill = total_fishing_KWhrs))+
+  facet_grid(gear_type~year)
+```
+
+## Effort in MPAS
+
+```{r}
+effort_vect <- vect(png_effort, geom = c("lon_bin", "lat_bin"), crs = "EPSG:4326")
+
+effort_in_mpa <- terra::extract(mpa_proposals, effort_vect) |> 
+  rename(row_id = id.y)
+
+effort_joined <- png_effort |> 
+  mutate(row_id = row_number()) |> 
+  left_join(effort_in_mpa, 
+            by = "row_id") |> 
+  select(-row_id)
+```
+
+```{r}
+eez_summary <- png_effort |> 
+  group_by(year) |> 
+  summarise(total_fishing_KWhrs =  sum(fishing_KWhrs, na.rm = TRUE), 
+            .groups = "drop") 
+
+mpa_summaries <- effort_joined |>
+  filter(!is.na(name)) |>
+  group_by(year, name) |>
+  summarise(fishing_KWhrs =  sum(fishing_KWhrs, na.rm = TRUE), 
+            .groups = "drop") |> 
+  left_join(eez_summary, by = "year") |> 
+  mutate(pct_of_total = round(fishing_KWhrs / total_fishing_KWhrs * 100, 2)) |> 
+  arrange(name, year) |> 
+  select(-total_fishing_KWhrs) 
+
+mpa_summaries |> 
+  select(-fishing_KWhrs) |> 
+  pivot_wider(names_from = year, 
+              values_from = c(pct_of_total),
+              values_fill = 0) |> 
+  arrange(name) |> 
+  mutate(mean_pct = round(rowMeans(across(is.numeric)),2)) 
+```
+## By gear type
+
+```{r}
+eez_gear_summary <- png_effort |> 
+  filter(gear_type %in% c("tuna_purse_seines", "drifting_longlines")) |>
+  group_by(year, gear_type) |> 
+  summarise(total_fishing_KWhrs =  sum(fishing_KWhrs, na.rm = TRUE), 
+            .groups = "drop") 
+
+mpa_gear_summaries <- effort_joined |>
+  filter(!is.na(name)) |>
+  filter(gear_type %in% c("tuna_purse_seines", "drifting_longlines")) |>
+  group_by(year, gear_type, name) |>
+  summarise(fishing_KWhrs =  sum(fishing_KWhrs, na.rm = TRUE), 
+            .groups = "drop") |> 
+  left_join(eez_gear_summary) |> 
+  mutate(pct_of_total = round(fishing_KWhrs / total_fishing_KWhrs * 100, 2)) |> 
+  arrange(name, year) |> 
+  select(-total_fishing_KWhrs) 
+
+mpa_gear_summaries |> 
+  select(-fishing_KWhrs) |>
+  pivot_wider(names_from = year, 
+              values_from = c(pct_of_total),
+              values_fill = 0) |> 
+  arrange(name) |> 
+  mutate(mean_pct = round(rowMeans(across(is.numeric)),2)) 
+```
+
+## By flag
+
+```{r}
+eez_flag_summary <- png_effort |> 
+  filter(gear_type %in% c("tuna_purse_seines", "drifting_longlines")) |>
+  group_by(year, flag) |> 
+  summarise(total_fishing_KWhrs =  sum(fishing_KWhrs, na.rm = TRUE), 
+            .groups = "drop") 
+
+top_flags <- eez_flag_summary |> 
+  complete(year, flag, fill = list(total_fishing_KWhrs = 0)) |> 
+  group_by(flag) |>
+  summarize(mean_fishing_KWhrs = mean(total_fishing_KWhrs, na.rm = TRUE)) |> 
+  arrange(desc(mean_fishing_KWhrs)) |> 
+  mutate(pct = 100*mean_fishing_KWhrs/sum(mean_fishing_KWhrs)) |> 
+  slice_head(n = 5)
+
+mpa_flag_summaries <- effort_joined |>
+  filter(!is.na(name)) |>
+  filter(gear_type %in% c("tuna_purse_seines", "drifting_longlines")) |>
+  group_by(year, flag, name) |>
+  summarise(fishing_KWhrs =  sum(fishing_KWhrs, na.rm = TRUE), 
+            .groups = "drop") |> 
+  left_join(eez_flag_summary,  by = c("year", "flag")) |> 
+  mutate(pct_of_total = round(fishing_KWhrs / total_fishing_KWhrs * 100, 2)) |> 
+  select(-total_fishing_KWhrs)
+  
+mpa_flag_summaries |> 
+  filter(flag %in% top_flags$flag) |> 
+  select(-fishing_KWhrs) |>
+  pivot_wider(names_from = year, 
+              values_from = c(pct_of_total),
+              values_fill = 0) |> 
+  arrange(flag) |> 
+  mutate(mean_pct = round(rowMeans(across(is.numeric)),2))
+```
