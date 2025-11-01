@@ -16,7 +16,7 @@ execute:
 ```{r setup, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
 options(scipen = 999)
 
-library(PristineSeasR)
+library(PristineSeasR2)
 library(sf)
 library(hms)
 library(readxl)
@@ -26,24 +26,21 @@ library(gt)
 library(pointblank)
 library(tidyverse)
 
-ps_paths <- PristineSeasR::get_sci_drive_paths()
+ps_paths <- PristineSeasR2::get_drive_paths()
 
 exp_id <- "PNG_2024"
 
-exp_path <- file.path(ps_paths$expeditions, 
-                      str_replace(exp_id, "_", "-"))
+exp_path <- file.path(ps_paths$expeditions, str_replace(exp_id, "_", "-"))
 
 bigrquery::bq_auth(email = "marine.data.science@ngs.org")
 
-bq_connection <- DBI::dbConnect(bigrquery::bigquery(), 
-                                project = "pristine-seas")
+bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas")
 ```
 
 ```{r}
 # Core site field
 
-core_site_fields <- c("ps_site_id","exp_id", "method", "region", "subregion", "locality",
-                      "date", "time", "latitude", "longitude", "team_lead", "notes")
+core_site_fields <- c("ps_site_id","exp_id", "method", "region", "subregion", "locality", "date", "time", "latitude", "longitude", "team_lead", "notes")
 
 # QAQC Functions ----
 
